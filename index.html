@@ -217,14 +217,16 @@
             try {
                 // ШАГ 1
                 statusText.innerText = "Шаг 1: Загрузка ядра (WASM)...";
-                const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
+                // МЕНЯЕМ JSDELIVR НА UNPKG (он реже попадает под блокировки)
+                const vision = await FilesetResolver.forVisionTasks("https://unpkg.com/@mediapipe/tasks-vision@0.10.0/wasm");
                 
                 // ШАГ 2
                 statusText.innerText = "Шаг 2: Скачивание нейросети (CPU режим)...";
                 faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
                     baseOptions: { 
-                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`, 
-                        delegate: "CPU" // Вынужденная мера для мобильных браузеров
+                        // ИСПОЛЬЗУЕМ ЗЕРКАЛО ДЛЯ ФАЙЛА НЕЙРОСЕТИ
+                        modelAssetPath: `https://raw.githubusercontent.com/google/mediapipe/master/docs/solutions/models/face_landmarker.task`, 
+                        delegate: "CPU"
                     },
                     outputFaceBlendshapes: false, 
                     outputFacialTransformationMatrixes: true, 
