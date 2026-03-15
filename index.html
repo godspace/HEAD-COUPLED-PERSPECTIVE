@@ -3,169 +3,195 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>3D Parallax - Гироскоп</title>
+    <title>3D Комната - Гироскоп</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #050510; font-family: sans-serif; touch-action: none; }
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; touch-action: none; }
         canvas { display: block; }
         
-        /* Интерфейс и кнопка запуска */
         #ui-container {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; flex-direction: column; justify-content: center; align-items: center;
-            background: rgba(0, 0, 0, 0.8); z-index: 10; color: white; text-align: center;
-            backdrop-filter: blur(5px); transition: opacity 0.5s;
+            background: rgba(0, 0, 0, 0.85); z-index: 10; color: white; text-align: center;
+            backdrop-filter: blur(8px); transition: opacity 0.5s;
         }
-        #ui-container h1 { margin-bottom: 10px; font-size: 24px; }
-        #ui-container p { margin-bottom: 30px; color: #aaa; max-width: 80%; }
+        #ui-container h1 { margin-bottom: 10px; font-size: 26px; }
+        #ui-container p { margin-bottom: 30px; color: #ccc; max-width: 80%; line-height: 1.5; }
         
         button {
             padding: 15px 40px; font-size: 18px; font-weight: bold; color: #fff;
-            background: #007bff; border: none; border-radius: 8px; cursor: pointer;
-            box-shadow: 0 4px 15px rgba(0, 123, 255, 0.4); transition: transform 0.2s;
+            background: #e63946; border: none; border-radius: 8px; cursor: pointer;
+            box-shadow: 0 4px 15px rgba(230, 57, 70, 0.4); transition: transform 0.2s;
         }
         button:active { transform: scale(0.95); }
-        
-        #debug { position: absolute; top: 10px; left: 10px; color: #00ff00; font-family: monospace; z-index: 5; pointer-events: none; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 
     <div id="ui-container">
-        <h1>Эффект 3D-глубины</h1>
-        <p>Держите телефон перед собой. Нажмите "Старт", чтобы активировать гироскоп и заглянуть вглубь экрана.</p>
+        <h1>Загляни внутрь</h1>
+        <p>Держите телефон ровно перед собой. Нажмите "Старт" и наклоняйте устройство, чтобы осмотреть комнату.</p>
         <button id="startButton">СТАРТ</button>
     </div>
 
-    <div id="debug">Ожидание...</div>
-
     <script>
         /* ==========================================
-           1. НАСТРОЙКА 3D СЦЕНЫ (THREE.JS)
+           1. НАСТРОЙКА 3D СЦЕНЫ И ТЕНЕЙ
            ========================================== */
         const scene = new THREE.Scene();
-        scene.fog = new THREE.FogExp2(0x050510, 0.04); // Глубокий космический туман
 
-        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+        const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 100);
+        // Камера стоит ровно на границе "экрана" (z = 0)
+        camera.position.set(0, 0, 0); 
+
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(window.devicePixelRatio); // Для четкости на ретина-дисплеях
+        renderer.setPixelRatio(window.devicePixelRatio);
+        
+        // Включаем реалистичные тени
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         document.body.appendChild(renderer.domElement);
 
-        // Создаем парящие геометрические объекты (многогранники)
-        const geometries = [
-            new THREE.IcosahedronGeometry(1, 0),
-            new THREE.OctahedronGeometry(1, 0),
-            new THREE.TorusGeometry(0.8, 0.3, 16, 32)
-        ];
+        /* ==========================================
+           2. СОЗДАЕМ КОМНАТУ (ДИОРАМУ)
+           ========================================== */
+        const roomWidth = 12;
+        const roomHeight = 8;
+        const roomDepth = 16; // Глубина комнаты
         
-        const material = new THREE.MeshStandardMaterial({ 
-            color: 0x00d2ff, 
-            wireframe: true, 
-            emissive: 0x003366 
-        });
+        const roomGeo = new THREE.BoxGeometry(roomWidth, roomHeight, roomDepth);
+        
+        // Красим каждую стену в свой цвет для лучшего ощущения перспективы
+        // Порядок в Three.js: Right, Left, Top, Bottom, Front(к камере), Back(дальняя)
+        const roomMaterials = [
+            new THREE.MeshStandardMaterial({ color: 0x457b9d, side: THREE.BackSide }), // Правая (синяя)
+            new THREE.MeshStandardMaterial({ color: 0xe63946, side: THREE.BackSide }), // Левая (красная)
+            new THREE.MeshStandardMaterial({ color: 0xeeeeee, side: THREE.BackSide }), // Потолок (белый)
+            new THREE.MeshStandardMaterial({ color: 0x1d3557, side: THREE.BackSide }), // Пол (тёмно-синий)
+            new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, side: THREE.BackSide }), // Передняя (НЕВИДИМАЯ)
+            new THREE.MeshStandardMaterial({ color: 0xa8dadc, side: THREE.BackSide })  // Дальняя стена (светлая)
+        ];
 
-        const objects = [];
-        // Генерируем поле объектов
-        for (let i = 0; i < 60; i++) {
-            const geo = geometries[Math.floor(Math.random() * geometries.length)];
-            const mesh = new THREE.Mesh(geo, material);
-            
-            // Распределяем их в пространстве случайным образом
-            mesh.position.set(
-                (Math.random() - 0.5) * 40, 
-                (Math.random() - 0.5) * 40, 
-                (Math.random() - 0.5) * 40 - 10 // Сдвигаем вглубь от камеры
-            );
-            
-            mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
-            
-            // Задаем случайную скорость вращения для каждого объекта
-            mesh.userData.rotSpeedX = (Math.random() - 0.5) * 0.01;
-            mesh.userData.rotSpeedY = (Math.random() - 0.5) * 0.01;
-            
-            scene.add(mesh);
-            objects.push(mesh);
-        }
+        const room = new THREE.Mesh(roomGeo, roomMaterials);
+        room.receiveShadow = true; // Стены получают тени
+        // Сдвигаем комнату так, чтобы её открытая (невидимая) часть была ровно там, где стоит камера
+        room.position.z = -roomDepth / 2; 
+        scene.add(room);
 
-        // Освещение
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-        scene.add(ambientLight);
-        const pointLight = new THREE.PointLight(0x00d2ff, 2, 50);
-        pointLight.position.set(0, 0, 5);
-        scene.add(pointLight);
+        // Сетка на пол (плитка), чтобы глазам было за что зацепиться
+        const grid = new THREE.GridHelper(roomWidth, 10, 0xffffff, 0xffffff);
+        grid.material.opacity = 0.2;
+        grid.material.transparent = true;
+        grid.position.set(0, -roomHeight / 2 + 0.01, -roomDepth / 2);
+        scene.add(grid);
 
         /* ==========================================
-           2. ПЕРЕМЕННЫЕ ДЛЯ ГИРОСКОПА
+           3. НАПОЛНЯЕМ КОМНАТУ ОБЪЕКТАМИ
+           ========================================== */
+        // Пьедестал по центру
+        const pedestalGeo = new THREE.CylinderGeometry(1, 1.2, 3, 32);
+        const pedestalMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+        const pedestal = new THREE.Mesh(pedestalGeo, pedestalMat);
+        pedestal.position.set(0, -roomHeight / 2 + 1.5, -roomDepth / 2);
+        pedestal.castShadow = true;
+        pedestal.receiveShadow = true;
+        scene.add(pedestal);
+
+        // Парящий артефакт над пьедесталом
+        const artifactGeo = new THREE.TorusKnotGeometry(0.8, 0.25, 100, 16);
+        const artifactMat = new THREE.MeshStandardMaterial({ color: 0xffb703, metalness: 0.7, roughness: 0.2 });
+        const artifact = new THREE.Mesh(artifactGeo, artifactMat);
+        artifact.position.set(0, -roomHeight / 2 + 4.5, -roomDepth / 2);
+        artifact.castShadow = true;
+        scene.add(artifact);
+
+        // Картина на дальней стене
+        const frameGeo = new THREE.BoxGeometry(4, 3, 0.2);
+        const frameMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+        const frame = new THREE.Mesh(frameGeo, frameMat);
+        frame.position.set(0, 1, -roomDepth + 0.1);
+        frame.castShadow = true;
+        scene.add(frame);
+
+        const canvasGeo = new THREE.PlaneGeometry(3.6, 2.6);
+        const canvasMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x457b9d, emissiveIntensity: 0.5 });
+        const canvasMesh = new THREE.Mesh(canvasGeo, canvasMat);
+        canvasMesh.position.set(0, 1, -roomDepth + 0.21);
+        scene.add(canvasMesh);
+
+        /* ==========================================
+           4. ОСВЕЩЕНИЕ
+           ========================================== */
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4); // Общий мягкий свет
+        scene.add(ambientLight);
+
+        // Лампа светит сверху вниз в центре комнаты
+        const spotLight = new THREE.SpotLight(0xffffff, 1.5);
+        spotLight.position.set(0, roomHeight / 2 - 1, -roomDepth / 2);
+        spotLight.angle = Math.PI / 4;
+        spotLight.penumbra = 0.5;
+        spotLight.castShadow = true;
+        spotLight.shadow.mapSize.width = 1024;
+        spotLight.shadow.mapSize.height = 1024;
+        scene.add(spotLight);
+
+        /* ==========================================
+           5. ГИРОСКОП И ЛОГИКА КАМЕРЫ
            ========================================== */
         let targetX = 0;
         let targetY = 0;
         let currentX = 0;
         let currentY = 0;
 
-        const SENSITIVITY = 0.15; // Чувствительность наклона
-        const LERP_FACTOR = 0.05; // Плавность сглаживания движений
+        const SENSITIVITY = 0.08; // Делаем чуть меньше, чтобы не "высунуть голову" сквозь стены
+        const LERP_FACTOR = 0.06;
 
-        // Базовые значения для калибровки при старте
         let baseBeta = null;
         let baseGamma = null;
 
-        const debugText = document.getElementById('debug');
-
-        /* ==========================================
-           3. ЗАПУСК И ОБРАБОТКА ДАТЧИКОВ
-           ========================================== */
         const startButton = document.getElementById('startButton');
         const uiContainer = document.getElementById('ui-container');
 
         startButton.addEventListener('click', async () => {
-            // Запрашиваем права для iOS 13+ устройств
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 try {
                     const permission = await DeviceOrientationEvent.requestPermission();
                     if (permission === 'granted') {
                         initGyroscope();
                     } else {
-                        alert('Доступ к гироскопу запрещен. Эффект работать не будет.');
+                        alert('Доступ к гироскопу запрещен.');
                         return;
                     }
                 } catch (error) {
-                    console.error('Ошибка запроса прав:', error);
+                    console.error('Ошибка прав:', error);
                 }
             } else {
-                // Для Android и остальных
                 initGyroscope();
             }
 
-            // Прячем меню
             uiContainer.style.opacity = '0';
             setTimeout(() => uiContainer.style.display = 'none', 500);
         });
 
         function initGyroscope() {
             window.addEventListener('deviceorientation', (event) => {
-                // Инициализация базового угла, чтобы телефон в текущем положении считался "центром"
                 if (baseBeta === null) {
-                    baseBeta = event.beta;   // Наклон вперед-назад
-                    baseGamma = event.gamma; // Наклон влево-вправо
-                    debugText.innerText = "Датчики активны";
+                    baseBeta = event.beta;
+                    baseGamma = event.gamma;
                 }
 
                 if (event.beta !== null && event.gamma !== null) {
-                    // Считаем разницу между текущим углом и стартовым
                     let deltaBeta = event.beta - baseBeta;
                     let deltaGamma = event.gamma - baseGamma;
 
-                    // Устраняем баг скачка при переходе gamma через 90/-90 градусов
                     if (deltaGamma > 180) deltaGamma -= 360;
                     if (deltaGamma < -180) deltaGamma += 360;
 
-                    // Ограничиваем максимальный наклон математически (чтобы камера не улетала далеко)
-                    deltaBeta = Math.max(-45, Math.min(45, deltaBeta));
-                    deltaGamma = Math.max(-45, Math.min(45, deltaGamma));
+                    // Ограничиваем наклон камеры, чтобы не выйти за пределы передней рамы
+                    deltaBeta = Math.max(-35, Math.min(35, deltaBeta));
+                    deltaGamma = Math.max(-40, Math.min(40, deltaGamma));
 
-                    // Передаем углы в целевые координаты камеры
-                    // Инвертируем Y (beta), чтобы наклон телефона на себя поднимал обзор
                     targetX = deltaGamma * SENSITIVITY;
                     targetY = -deltaBeta * SENSITIVITY;
                 }
@@ -173,39 +199,39 @@
         }
 
         /* ==========================================
-           4. ЦИКЛ АНИМАЦИИ (РЕНДЕР)
+           6. АНИМАЦИЯ
            ========================================== */
+        const clock = new THREE.Clock();
+
         function animate() {
             requestAnimationFrame(animate);
 
-            // Анимация вращения объектов
-            objects.forEach(mesh => {
-                mesh.rotation.x += mesh.userData.rotSpeedX;
-                mesh.rotation.y += mesh.userData.rotSpeedY;
-            });
+            const elapsedTime = clock.getElapsedTime();
 
-            // Плавное следование камеры за наклоном телефона (Интерполяция)
+            // Плавно вращаем и качаем артефакт
+            artifact.rotation.x += 0.01;
+            artifact.rotation.y += 0.015;
+            artifact.position.y = (-roomHeight / 2 + 4.5) + Math.sin(elapsedTime * 2) * 0.3;
+
+            // Плавно смещаем камеру за гироскопом
             currentX += (targetX - currentX) * LERP_FACTOR;
             currentY += (targetY - currentY) * LERP_FACTOR;
 
             camera.position.x = currentX;
             camera.position.y = currentY;
-            camera.position.z = 5;
 
-            // Камера всегда смотрит в центр сцены, создавая параллакс-искажение
-            camera.lookAt(0, 0, -10);
+            // Ключевой момент для иллюзии окна: камера всегда смотрит в дальний центр комнаты
+            camera.lookAt(currentX * 0.3, currentY * 0.3, -roomDepth);
 
             renderer.render(scene, camera);
         }
 
-        // Адаптация под поворот экрана смартфона
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        // Запускаем цикл
         animate();
     </script>
 </body>
