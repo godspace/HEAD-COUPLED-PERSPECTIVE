@@ -2,164 +2,174 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Head Tracking Parallax (X, Y, Z)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>3D Parallax - Гироскоп</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
+        body { margin: 0; overflow: hidden; background-color: #050510; font-family: sans-serif; touch-action: none; }
         canvas { display: block; }
-        #ui { position: absolute; top: 15px; left: 15px; color: white; pointer-events: none; text-shadow: 1px 1px 2px black; }
-        /* Видео с веб-камеры в углу для отладки */
-        #webcam { 
-            position: absolute; bottom: 15px; right: 15px; 
-            width: 160px; height: 120px; 
-            transform: scaleX(-1); /* Отзеркаливаем для удобства */
-            border: 2px solid rgba(255, 255, 255, 0.5); 
-            border-radius: 8px;
-            background: #222;
+        
+        /* Интерфейс и кнопка запуска */
+        #ui-container {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            background: rgba(0, 0, 0, 0.8); z-index: 10; color: white; text-align: center;
+            backdrop-filter: blur(5px); transition: opacity 0.5s;
         }
-        #loading { color: #ffaa00; font-weight: bold; }
+        #ui-container h1 { margin-bottom: 10px; font-size: 24px; }
+        #ui-container p { margin-bottom: 30px; color: #aaa; max-width: 80%; }
+        
+        button {
+            padding: 15px 40px; font-size: 18px; font-weight: bold; color: #fff;
+            background: #007bff; border: none; border-radius: 8px; cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0, 123, 255, 0.4); transition: transform 0.2s;
+        }
+        button:active { transform: scale(0.95); }
+        
+        #debug { position: absolute; top: 10px; left: 10px; color: #00ff00; font-family: monospace; z-index: 5; pointer-events: none; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 
-    <div id="ui">
-        <h2>3D Портал (Отслеживание X, Y, Z)</h2>
-        <p id="loading">Загрузка нейросети и включение камеры...</p>
-        <p>Двигайте головой влево/вправо и приближайтесь к экрану.</p>
+    <div id="ui-container">
+        <h1>Эффект 3D-глубины</h1>
+        <p>Держите телефон перед собой. Нажмите "Старт", чтобы активировать гироскоп и заглянуть вглубь экрана.</p>
+        <button id="startButton">СТАРТ</button>
     </div>
 
-    <video id="webcam" autoplay playsinline></video>
+    <div id="debug">Ожидание...</div>
 
-    <script type="module">
-        // Импортируем MediaPipe
-        import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
-
+    <script>
         /* ==========================================
            1. НАСТРОЙКА 3D СЦЕНЫ (THREE.JS)
            ========================================== */
         const scene = new THREE.Scene();
-        scene.fog = new THREE.Fog(0x000000, 2, 15); // Туман для глубины
+        scene.fog = new THREE.FogExp2(0x050510, 0.04); // Глубокий космический туман
 
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio); // Для четкости на ретина-дисплеях
         document.body.appendChild(renderer.domElement);
 
-        // Создаем "комнату"
-        const roomGeo = new THREE.BoxGeometry(20, 10, 20);
-        const roomMat = new THREE.MeshStandardMaterial({ color: 0x224466, side: THREE.BackSide, wireframe: false });
-        const room = new THREE.Mesh(roomGeo, roomMat);
-        scene.add(room);
+        // Создаем парящие геометрические объекты (многогранники)
+        const geometries = [
+            new THREE.IcosahedronGeometry(1, 0),
+            new THREE.OctahedronGeometry(1, 0),
+            new THREE.TorusGeometry(0.8, 0.3, 16, 32)
+        ];
+        
+        const material = new THREE.MeshStandardMaterial({ 
+            color: 0x00d2ff, 
+            wireframe: true, 
+            emissive: 0x003366 
+        });
 
-        // Добавляем сетку на пол и стены для ориентира
-        const gridHelper = new THREE.GridHelper(20, 20, 0x00ff00, 0x444444);
-        gridHelper.position.y = -5;
-        scene.add(gridHelper);
-
-        // Добавляем парящие объекты для сильного параллакса
-        const cubes = [];
-        const cubeGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
-        const cubeMat = new THREE.MeshStandardMaterial({ color: 0xffaa00 });
-        for (let i = 0; i < 30; i++) {
-            const mesh = new THREE.Mesh(cubeGeo, cubeMat);
-            mesh.position.set((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 10);
-            mesh.rotation.set(Math.random(), Math.random(), Math.random());
+        const objects = [];
+        // Генерируем поле объектов
+        for (let i = 0; i < 60; i++) {
+            const geo = geometries[Math.floor(Math.random() * geometries.length)];
+            const mesh = new THREE.Mesh(geo, material);
+            
+            // Распределяем их в пространстве случайным образом
+            mesh.position.set(
+                (Math.random() - 0.5) * 40, 
+                (Math.random() - 0.5) * 40, 
+                (Math.random() - 0.5) * 40 - 10 // Сдвигаем вглубь от камеры
+            );
+            
+            mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
+            
+            // Задаем случайную скорость вращения для каждого объекта
+            mesh.userData.rotSpeedX = (Math.random() - 0.5) * 0.01;
+            mesh.userData.rotSpeedY = (Math.random() - 0.5) * 0.01;
+            
             scene.add(mesh);
-            cubes.push(mesh);
+            objects.push(mesh);
         }
 
         // Освещение
-        const ambientLight = new THREE.AmbientLight(0x404040);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         scene.add(ambientLight);
-        const pointLight = new THREE.PointLight(0xffffff, 1.5, 50);
-        pointLight.position.set(0, 2, 0);
+        const pointLight = new THREE.PointLight(0x00d2ff, 2, 50);
+        pointLight.position.set(0, 0, 5);
         scene.add(pointLight);
 
         /* ==========================================
-           2. ПЕРЕМЕННЫЕ ДЛЯ ТРЕКИНГА
+           2. ПЕРЕМЕННЫЕ ДЛЯ ГИРОСКОПА
            ========================================== */
-        // Целевая позиция (от MediaPipe)
-        let targetHead = { x: 0, y: 0, z: 5 }; 
-        // Текущая позиция камеры (для плавности)
-        let currentCameraPos = { x: 0, y: 0, z: 5 };
+        let targetX = 0;
+        let targetY = 0;
+        let currentX = 0;
+        let currentY = 0;
 
-        const SENSITIVITY_XY = 4.0; // Чувствительность по осям X и Y
-        const LERP_FACTOR = 0.08;   // Скорость сглаживания движений
+        const SENSITIVITY = 0.15; // Чувствительность наклона
+        const LERP_FACTOR = 0.05; // Плавность сглаживания движений
+
+        // Базовые значения для калибровки при старте
+        let baseBeta = null;
+        let baseGamma = null;
+
+        const debugText = document.getElementById('debug');
 
         /* ==========================================
-           3. НАСТРОЙКА MEDIAPIPE И КАМЕРЫ
+           3. ЗАПУСК И ОБРАБОТКА ДАТЧИКОВ
            ========================================== */
-        const video = document.getElementById('webcam');
-        const loadingText = document.getElementById('loading');
-        let faceLandmarker;
-        let lastVideoTime = -1;
+        const startButton = document.getElementById('startButton');
+        const uiContainer = document.getElementById('ui-container');
 
-        async function initMediaPipe() {
-            const vision = await FilesetResolver.forVisionTasks(
-                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-            );
-            faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-                baseOptions: {
-                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
-                    delegate: "GPU"
-                },
-                outputFaceBlendshapes: false,
-                runningMode: "VIDEO",
-                numFaces: 1
-            });
-            startCamera();
-        }
-
-        function startCamera() {
-            navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
-                .then((stream) => {
-                    video.srcObject = stream;
-                    video.addEventListener("loadeddata", () => {
-                        loadingText.innerText = "Система активна! Двигайте головой.";
-                        loadingText.style.color = "#00ff00";
-                        predictWebcam();
-                    });
-                })
-                .catch((err) => {
-                    loadingText.innerText = "Ошибка доступа к камере!";
-                    loadingText.style.color = "#ff0000";
-                    console.error(err);
-                });
-        }
-
-        async function predictWebcam() {
-            if (video.currentTime !== lastVideoTime) {
-                lastVideoTime = video.currentTime;
-                const results = faceLandmarker.detectForVideo(video, performance.now());
-                
-                if (results.faceLandmarks.length > 0) {
-                    const landmarks = results.faceLandmarks[0];
-                    
-                    // X и Y: берем кончик носа (индекс 1)
-                    const nose = landmarks[1];
-                    const mappedX = ((1 - nose.x) - 0.5) * 2; 
-                    const mappedY = -(nose.y - 0.5) * 2; 
-
-                    // Z: вычисляем расстояние между внешними уголками глаз (индексы 33 и 263)
-                    const leftEye = landmarks[33];
-                    const rightEye = landmarks[263];
-                    const dx = rightEye.x - leftEye.x;
-                    const dy = rightEye.y - leftEye.y;
-                    const eyeDistance = Math.sqrt(dx * dx + dy * dy);
-
-                    // Переводим дистанцию глаз в координату Z. 
-                    // Базовое расстояние обычно около 0.12. Чем больше расстояние, тем ближе лицо.
-                    // Формула ниже настраивает камеру так, чтобы она "въезжала" в сцену при приближении лица.
-                    const mappedZ = 5 + (0.12 - eyeDistance) * 30;
-
-                    // Обновляем целевые координаты
-                    targetHead.x = mappedX * SENSITIVITY_XY;
-                    targetHead.y = mappedY * SENSITIVITY_XY;
-                    targetHead.z = Math.max(1, Math.min(mappedZ, 8)); // Ограничиваем Z, чтобы не вылететь за стены
+        startButton.addEventListener('click', async () => {
+            // Запрашиваем права для iOS 13+ устройств
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const permission = await DeviceOrientationEvent.requestPermission();
+                    if (permission === 'granted') {
+                        initGyroscope();
+                    } else {
+                        alert('Доступ к гироскопу запрещен. Эффект работать не будет.');
+                        return;
+                    }
+                } catch (error) {
+                    console.error('Ошибка запроса прав:', error);
                 }
+            } else {
+                // Для Android и остальных
+                initGyroscope();
             }
-            requestAnimationFrame(predictWebcam);
+
+            // Прячем меню
+            uiContainer.style.opacity = '0';
+            setTimeout(() => uiContainer.style.display = 'none', 500);
+        });
+
+        function initGyroscope() {
+            window.addEventListener('deviceorientation', (event) => {
+                // Инициализация базового угла, чтобы телефон в текущем положении считался "центром"
+                if (baseBeta === null) {
+                    baseBeta = event.beta;   // Наклон вперед-назад
+                    baseGamma = event.gamma; // Наклон влево-вправо
+                    debugText.innerText = "Датчики активны";
+                }
+
+                if (event.beta !== null && event.gamma !== null) {
+                    // Считаем разницу между текущим углом и стартовым
+                    let deltaBeta = event.beta - baseBeta;
+                    let deltaGamma = event.gamma - baseGamma;
+
+                    // Устраняем баг скачка при переходе gamma через 90/-90 градусов
+                    if (deltaGamma > 180) deltaGamma -= 360;
+                    if (deltaGamma < -180) deltaGamma += 360;
+
+                    // Ограничиваем максимальный наклон математически (чтобы камера не улетала далеко)
+                    deltaBeta = Math.max(-45, Math.min(45, deltaBeta));
+                    deltaGamma = Math.max(-45, Math.min(45, deltaGamma));
+
+                    // Передаем углы в целевые координаты камеры
+                    // Инвертируем Y (beta), чтобы наклон телефона на себя поднимал обзор
+                    targetX = deltaGamma * SENSITIVITY;
+                    targetY = -deltaBeta * SENSITIVITY;
+                }
+            });
         }
 
         /* ==========================================
@@ -168,32 +178,34 @@
         function animate() {
             requestAnimationFrame(animate);
 
-            // Медленно вращаем кубы для живости
-            cubes.forEach(cube => {
-                cube.rotation.x += 0.005;
-                cube.rotation.y += 0.005;
+            // Анимация вращения объектов
+            objects.forEach(mesh => {
+                mesh.rotation.x += mesh.userData.rotSpeedX;
+                mesh.rotation.y += mesh.userData.rotSpeedY;
             });
 
-            // Плавное следование камеры за головой (Lerp) по всем трем осям
-            currentCameraPos.x += (targetHead.x - currentCameraPos.x) * LERP_FACTOR;
-            currentCameraPos.y += (targetHead.y - currentCameraPos.y) * LERP_FACTOR;
-            currentCameraPos.z += (targetHead.z - currentCameraPos.z) * LERP_FACTOR;
+            // Плавное следование камеры за наклоном телефона (Интерполяция)
+            currentX += (targetX - currentX) * LERP_FACTOR;
+            currentY += (targetY - currentY) * LERP_FACTOR;
 
-            camera.position.set(currentCameraPos.x, currentCameraPos.y, currentCameraPos.z);
-            camera.lookAt(0, 0, 0); // Камера всегда смотрит в центр сцены
+            camera.position.x = currentX;
+            camera.position.y = currentY;
+            camera.position.z = 5;
+
+            // Камера всегда смотрит в центр сцены, создавая параллакс-искажение
+            camera.lookAt(0, 0, -10);
 
             renderer.render(scene, camera);
         }
 
-        // Адаптация под размер окна
+        // Адаптация под поворот экрана смартфона
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
-        // Запуск
-        initMediaPipe();
+        // Запускаем цикл
         animate();
     </script>
 </body>
