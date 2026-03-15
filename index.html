@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>3D Комната - Гироскоп</title>
+    <title>Ultimate 3D Parallax: Face + Gyro</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; touch-action: none; }
         canvas { display: block; }
@@ -19,168 +19,184 @@
         
         button {
             padding: 15px 40px; font-size: 18px; font-weight: bold; color: #fff;
-            background: #e63946; border: none; border-radius: 8px; cursor: pointer;
-            box-shadow: 0 4px 15px rgba(230, 57, 70, 0.4); transition: transform 0.2s;
+            background: #2a9d8f; border: none; border-radius: 8px; cursor: pointer;
+            box-shadow: 0 4px 15px rgba(42, 157, 143, 0.4); transition: transform 0.2s;
         }
         button:active { transform: scale(0.95); }
+        button:disabled { background: #555; cursor: not-allowed; box-shadow: none; }
+
+        /* Маленькое превью камеры для контроля */
+        #webcam { 
+            position: absolute; bottom: 15px; right: 15px; 
+            width: 120px; height: 90px; 
+            transform: scaleX(-1); border: 2px solid rgba(255,255,255,0.3); 
+            border-radius: 8px; background: #222; z-index: 5;
+            object-fit: cover;
+        }
+        #status { color: #e9c46a; font-weight: bold; margin-bottom: 20px; height: 20px; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 
     <div id="ui-container">
-        <h1>Загляни внутрь</h1>
-        <p>Держите телефон ровно перед собой. Нажмите "Старт" и наклоняйте устройство, чтобы осмотреть комнату.</p>
-        <button id="startButton">СТАРТ</button>
+        <h1>Полное погружение</h1>
+        <p>Держите телефон ровно перед лицом. Разрешите доступ к камере и гироскопу.</p>
+        <div id="status">Загрузка нейросети...</div>
+        <button id="startButton" disabled>СТАРТ</button>
     </div>
 
-    <script>
+    <video id="webcam" autoplay playsinline></video>
+
+    <script type="module">
+        import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+
         /* ==========================================
-           1. НАСТРОЙКА 3D СЦЕНЫ И ТЕНЕЙ
+           1. НАСТРОЙКА 3D СЦЕНЫ
            ========================================== */
         const scene = new THREE.Scene();
 
+        // Создаем группу "Голова" (для гироскопа) и саму камеру (для лица)
+        const cameraGroup = new THREE.Group();
+        scene.add(cameraGroup);
+
         const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 100);
-        // Камера стоит ровно на границе "экрана" (z = 0)
-        camera.position.set(0, 0, 0); 
+        cameraGroup.add(camera); // Камера теперь внутри группы
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(window.devicePixelRatio);
-        
-        // Включаем реалистичные тени
         renderer.shadowMap.enabled = true;
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         document.body.appendChild(renderer.domElement);
 
         /* ==========================================
-           2. СОЗДАЕМ КОМНАТУ (ДИОРАМУ)
+           2. СОЗДАЕМ ДИОРАМУ (КОМНАТУ)
            ========================================== */
-        const roomWidth = 12;
-        const roomHeight = 8;
-        const roomDepth = 16; // Глубина комнаты
-        
-        const roomGeo = new THREE.BoxGeometry(roomWidth, roomHeight, roomDepth);
-        
-        // Красим каждую стену в свой цвет для лучшего ощущения перспективы
-        // Порядок в Three.js: Right, Left, Top, Bottom, Front(к камере), Back(дальняя)
+        const roomGeo = new THREE.BoxGeometry(12, 8, 16);
         const roomMaterials = [
-            new THREE.MeshStandardMaterial({ color: 0x457b9d, side: THREE.BackSide }), // Правая (синяя)
-            new THREE.MeshStandardMaterial({ color: 0xe63946, side: THREE.BackSide }), // Левая (красная)
-            new THREE.MeshStandardMaterial({ color: 0xeeeeee, side: THREE.BackSide }), // Потолок (белый)
-            new THREE.MeshStandardMaterial({ color: 0x1d3557, side: THREE.BackSide }), // Пол (тёмно-синий)
-            new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, side: THREE.BackSide }), // Передняя (НЕВИДИМАЯ)
-            new THREE.MeshStandardMaterial({ color: 0xa8dadc, side: THREE.BackSide })  // Дальняя стена (светлая)
+            new THREE.MeshStandardMaterial({ color: 0x457b9d, side: THREE.BackSide }), // Право
+            new THREE.MeshStandardMaterial({ color: 0xe63946, side: THREE.BackSide }), // Лево
+            new THREE.MeshStandardMaterial({ color: 0xeeeeee, side: THREE.BackSide }), // Верх
+            new THREE.MeshStandardMaterial({ color: 0x1d3557, side: THREE.BackSide }), // Низ
+            new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, side: THREE.BackSide }), // Перед (невидимый)
+            new THREE.MeshStandardMaterial({ color: 0xa8dadc, side: THREE.BackSide })  // Тыл
         ];
-
         const room = new THREE.Mesh(roomGeo, roomMaterials);
-        room.receiveShadow = true; // Стены получают тени
-        // Сдвигаем комнату так, чтобы её открытая (невидимая) часть была ровно там, где стоит камера
-        room.position.z = -roomDepth / 2; 
+        room.receiveShadow = true;
+        room.position.z = -8; 
         scene.add(room);
 
-        // Сетка на пол (плитка), чтобы глазам было за что зацепиться
-        const grid = new THREE.GridHelper(roomWidth, 10, 0xffffff, 0xffffff);
-        grid.material.opacity = 0.2;
-        grid.material.transparent = true;
-        grid.position.set(0, -roomHeight / 2 + 0.01, -roomDepth / 2);
+        const grid = new THREE.GridHelper(12, 10, 0xffffff, 0xffffff);
+        grid.material.opacity = 0.2; grid.material.transparent = true;
+        grid.position.set(0, -3.99, -8);
         scene.add(grid);
 
-        /* ==========================================
-           3. НАПОЛНЯЕМ КОМНАТУ ОБЪЕКТАМИ
-           ========================================== */
-        // Пьедестал по центру
-        const pedestalGeo = new THREE.CylinderGeometry(1, 1.2, 3, 32);
-        const pedestalMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
-        const pedestal = new THREE.Mesh(pedestalGeo, pedestalMat);
-        pedestal.position.set(0, -roomHeight / 2 + 1.5, -roomDepth / 2);
-        pedestal.castShadow = true;
-        pedestal.receiveShadow = true;
-        scene.add(pedestal);
-
-        // Парящий артефакт над пьедесталом
-        const artifactGeo = new THREE.TorusKnotGeometry(0.8, 0.25, 100, 16);
-        const artifactMat = new THREE.MeshStandardMaterial({ color: 0xffb703, metalness: 0.7, roughness: 0.2 });
+        // Центральный объект
+        const artifactGeo = new THREE.TorusKnotGeometry(1, 0.3, 100, 16);
+        const artifactMat = new THREE.MeshStandardMaterial({ color: 0xffb703, metalness: 0.8, roughness: 0.2 });
         const artifact = new THREE.Mesh(artifactGeo, artifactMat);
-        artifact.position.set(0, -roomHeight / 2 + 4.5, -roomDepth / 2);
+        artifact.position.set(0, 0, -8);
         artifact.castShadow = true;
         scene.add(artifact);
 
-        // Картина на дальней стене
-        const frameGeo = new THREE.BoxGeometry(4, 3, 0.2);
-        const frameMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
-        const frame = new THREE.Mesh(frameGeo, frameMat);
-        frame.position.set(0, 1, -roomDepth + 0.1);
-        frame.castShadow = true;
-        scene.add(frame);
-
-        const canvasGeo = new THREE.PlaneGeometry(3.6, 2.6);
-        const canvasMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x457b9d, emissiveIntensity: 0.5 });
-        const canvasMesh = new THREE.Mesh(canvasGeo, canvasMat);
-        canvasMesh.position.set(0, 1, -roomDepth + 0.21);
-        scene.add(canvasMesh);
-
-        /* ==========================================
-           4. ОСВЕЩЕНИЕ
-           ========================================== */
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4); // Общий мягкий свет
-        scene.add(ambientLight);
-
-        // Лампа светит сверху вниз в центре комнаты
+        // Освещение
+        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
         const spotLight = new THREE.SpotLight(0xffffff, 1.5);
-        spotLight.position.set(0, roomHeight / 2 - 1, -roomDepth / 2);
-        spotLight.angle = Math.PI / 4;
-        spotLight.penumbra = 0.5;
+        spotLight.position.set(0, 3, -4);
         spotLight.castShadow = true;
-        spotLight.shadow.mapSize.width = 1024;
-        spotLight.shadow.mapSize.height = 1024;
         scene.add(spotLight);
 
         /* ==========================================
-           5. ГИРОСКОП И ЛОГИКА КАМЕРЫ
+           3. ПЕРЕМЕННЫЕ ДЛЯ ДАТЧИКОВ
            ========================================== */
-        let targetX = 0;
-        let targetY = 0;
-        let currentX = 0;
-        let currentY = 0;
+        // Цели для гироскопа (Вращение)
+        let targetRotX = 0, targetRotY = 0;
+        let currentRotX = 0, currentRotY = 0;
+        let baseBeta = null, baseGamma = null;
 
-        const SENSITIVITY = 0.08; // Делаем чуть меньше, чтобы не "высунуть голову" сквозь стены
-        const LERP_FACTOR = 0.06;
+        // Цели для MediaPipe (Смещение)
+        let targetPosX = 0, targetPosY = 0;
+        let currentPosX = 0, currentPosY = 0;
 
-        let baseBeta = null;
-        let baseGamma = null;
+        // Настройки чувствительности
+        const GYRO_SENSITIVITY = 0.015; // Радианы вращения
+        const FACE_SENSITIVITY = 3.0;   // Единицы смещения в 3D
+        const LERP_FACTOR = 0.08;
 
-        const startButton = document.getElementById('startButton');
-        const uiContainer = document.getElementById('ui-container');
+        /* ==========================================
+           4. ИНИЦИАЛИЗАЦИЯ MEDIAPIPE И КАМЕРЫ
+           ========================================== */
+        const video = document.getElementById('webcam');
+        const startBtn = document.getElementById('startButton');
+        const statusText = document.getElementById('status');
+        let faceLandmarker;
+        let lastVideoTime = -1;
 
-        startButton.addEventListener('click', async () => {
+        async function loadModels() {
+            try {
+                const vision = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+                );
+                faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+                        delegate: "GPU"
+                    },
+                    outputFaceBlendshapes: false,
+                    runningMode: "VIDEO",
+                    numFaces: 1
+                });
+                statusText.innerText = "Нейросеть готова. Нажмите СТАРТ.";
+                statusText.style.color = "#2a9d8f";
+                startBtn.disabled = false;
+            } catch (e) {
+                statusText.innerText = "Ошибка загрузки нейросети.";
+                statusText.style.color = "#e63946";
+            }
+        }
+
+        // Запускаем загрузку моделей сразу
+        loadModels();
+
+        /* ==========================================
+           5. КНОПКА СТАРТ: ЗАПУСК ВСЕХ СИСТЕМ
+           ========================================== */
+        startBtn.addEventListener('click', async () => {
+            // 1. Запрос гироскопа (iOS)
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 try {
                     const permission = await DeviceOrientationEvent.requestPermission();
-                    if (permission === 'granted') {
-                        initGyroscope();
-                    } else {
-                        alert('Доступ к гироскопу запрещен.');
-                        return;
-                    }
-                } catch (error) {
-                    console.error('Ошибка прав:', error);
-                }
+                    if (permission === 'granted') initGyro();
+                } catch (e) { console.error(e); }
             } else {
-                initGyroscope();
+                initGyro();
             }
 
-            uiContainer.style.opacity = '0';
-            setTimeout(() => uiContainer.style.display = 'none', 500);
+            // 2. Запуск веб-камеры
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+                .then((stream) => {
+                    video.srcObject = stream;
+                    video.addEventListener("loadeddata", () => {
+                        predictWebcam();
+                    });
+                })
+                .catch((err) => {
+                    alert("Без камеры будет работать только гироскоп.");
+                });
+
+            document.getElementById('ui-container').style.opacity = '0';
+            setTimeout(() => document.getElementById('ui-container').style.display = 'none', 500);
         });
 
-        function initGyroscope() {
+        /* ==========================================
+           6. ЛОГИКА ДАТЧИКОВ
+           ========================================== */
+        function initGyro() {
             window.addEventListener('deviceorientation', (event) => {
                 if (baseBeta === null) {
                     baseBeta = event.beta;
                     baseGamma = event.gamma;
                 }
-
                 if (event.beta !== null && event.gamma !== null) {
                     let deltaBeta = event.beta - baseBeta;
                     let deltaGamma = event.gamma - baseGamma;
@@ -188,40 +204,57 @@
                     if (deltaGamma > 180) deltaGamma -= 360;
                     if (deltaGamma < -180) deltaGamma += 360;
 
-                    // Ограничиваем наклон камеры, чтобы не выйти за пределы передней рамы
                     deltaBeta = Math.max(-35, Math.min(35, deltaBeta));
                     deltaGamma = Math.max(-40, Math.min(40, deltaGamma));
 
-                    targetX = deltaGamma * SENSITIVITY;
-                    targetY = -deltaBeta * SENSITIVITY;
+                    // Гироскоп задает целевое ВРАЩЕНИЕ группы (в радианах)
+                    // Наклон телефона влево-вправо вращает камеру по оси Y
+                    targetRotY = -deltaGamma * GYRO_SENSITIVITY;
+                    // Наклон вверх-вниз вращает камеру по оси X
+                    targetRotX = -deltaBeta * GYRO_SENSITIVITY;
                 }
             });
         }
 
-        /* ==========================================
-           6. АНИМАЦИЯ
-           ========================================== */
-        const clock = new THREE.Clock();
+        async function predictWebcam() {
+            if (video.currentTime !== lastVideoTime) {
+                lastVideoTime = video.currentTime;
+                const results = faceLandmarker.detectForVideo(video, performance.now());
+                
+                if (results.faceLandmarks.length > 0) {
+                    const nose = results.faceLandmarks[0][1];
+                    const mappedX = ((1 - nose.x) - 0.5) * 2; 
+                    const mappedY = -(nose.y - 0.5) * 2; 
 
+                    // Камера задает целевое СМЕЩЕНИЕ внутри группы
+                    targetPosX = mappedX * FACE_SENSITIVITY;
+                    targetPosY = mappedY * FACE_SENSITIVITY;
+                }
+            }
+            requestAnimationFrame(predictWebcam);
+        }
+
+        /* ==========================================
+           7. АНИМАЦИЯ И РЕНДЕР
+           ========================================== */
         function animate() {
             requestAnimationFrame(animate);
 
-            const elapsedTime = clock.getElapsedTime();
-
-            // Плавно вращаем и качаем артефакт
+            // Анимация артефакта
             artifact.rotation.x += 0.01;
             artifact.rotation.y += 0.015;
-            artifact.position.y = (-roomHeight / 2 + 4.5) + Math.sin(elapsedTime * 2) * 0.3;
 
-            // Плавно смещаем камеру за гироскопом
-            currentX += (targetX - currentX) * LERP_FACTOR;
-            currentY += (targetY - currentY) * LERP_FACTOR;
+            // 1. Сглаживание и применение гироскопа (Вращение группы)
+            currentRotX += (targetRotX - currentRotX) * LERP_FACTOR;
+            currentRotY += (targetRotY - currentRotY) * LERP_FACTOR;
+            cameraGroup.rotation.x = currentRotX;
+            cameraGroup.rotation.y = currentRotY;
 
-            camera.position.x = currentX;
-            camera.position.y = currentY;
-
-            // Ключевой момент для иллюзии окна: камера всегда смотрит в дальний центр комнаты
-            camera.lookAt(currentX * 0.3, currentY * 0.3, -roomDepth);
+            // 2. Сглаживание и применение камеры (Смещение самой камеры)
+            currentPosX += (targetPosX - currentPosX) * LERP_FACTOR;
+            currentPosY += (targetPosY - currentPosY) * LERP_FACTOR;
+            camera.position.x = currentPosX;
+            camera.position.y = currentPosY;
 
             renderer.render(scene, camera);
         }
