@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>3D Parallax: Вращение камеры головой</title>
+    <title>3D Свободная камера: 6DoF + Гироскоп</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; touch-action: none; }
         canvas { display: block; }
@@ -15,8 +15,13 @@
             backdrop-filter: blur(8px); transition: opacity 0.5s;
         }
         #ui-container h1 { margin-bottom: 10px; font-size: 26px; }
-        #ui-container p { margin-bottom: 30px; color: #ccc; max-width: 80%; line-height: 1.5; }
+        #ui-container p { margin-bottom: 20px; color: #ccc; max-width: 80%; line-height: 1.5; }
         
+        #status {
+            color: #e9c46a; font-weight: bold; margin-bottom: 25px; 
+            min-height: 20px; font-size: 16px;
+        }
+
         button#startButton {
             padding: 15px 40px; font-size: 18px; font-weight: bold; color: #fff;
             background: #2a9d8f; border: none; border-radius: 8px; cursor: pointer;
@@ -49,7 +54,6 @@
             transform: scaleX(-1); border: 2px solid rgba(255,255,255,0.3); 
             border-radius: 8px; background: #222; z-index: 5; object-fit: cover;
         }
-        #status { color: #e9c46a; font-weight: bold; margin-bottom: 20px; height: 20px; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
@@ -57,9 +61,9 @@
 
     <div id="ui-container">
         <h1>Свободная камера</h1>
-        <p>Теперь повороты вашей головы вращают саму 3D-камеру внутри комнаты.</p>
-        <div id="status">Загрузка нейросети...</div>
-        <button id="startButton" disabled>СТАРТ</button>
+        <p>Повороты головы вращают обзор, смещение тела — двигает камеру.</p>
+        <div id="status">Нажмите СТАРТ для загрузки модулей</div>
+        <button id="startButton">СТАРТ</button>
     </div>
 
     <video id="webcam" autoplay playsinline></video>
@@ -88,11 +92,11 @@
         <div class="checkbox-grid">
             <div class="checkbox-group">
                 <input type="checkbox" id="invertFaceX">
-                <label for="invertFaceX">Лицо X (Влево/Вправо)</label>
+                <label for="invertFaceX">Тело X (Влево/Вправо)</label>
             </div>
             <div class="checkbox-group">
                 <input type="checkbox" id="invertFaceY">
-                <label for="invertFaceY">Лицо Y (Вверх/Вниз)</label>
+                <label for="invertFaceY">Тело Y (Вверх/Вниз)</label>
             </div>
             <div class="checkbox-group">
                 <input type="checkbox" id="invertGyroY" checked>
@@ -109,10 +113,11 @@
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
 
         /* ==========================================
-           1. НАСТРОЙКА СЦЕНЫ
+           1. НАСТРОЙКА СЦЕНЫ И THREE.JS
            ========================================== */
         const scene = new THREE.Scene();
 
+        // Камера помещается в группу для независимой работы гироскопа
         const cameraGroup = new THREE.Group();
         scene.add(cameraGroup);
         const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 100);
@@ -124,20 +129,22 @@
         renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
 
+        // Построение комнаты
         const roomGeo = new THREE.BoxGeometry(12, 8, 16);
         const roomMaterials = [
-            new THREE.MeshStandardMaterial({ color: 0x457b9d, side: THREE.BackSide }), 
-            new THREE.MeshStandardMaterial({ color: 0xe63946, side: THREE.BackSide }), 
-            new THREE.MeshStandardMaterial({ color: 0xeeeeee, side: THREE.BackSide }), 
-            new THREE.MeshStandardMaterial({ color: 0x1d3557, side: THREE.BackSide }), 
-            new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, side: THREE.BackSide }), 
-            new THREE.MeshStandardMaterial({ color: 0xa8dadc, side: THREE.BackSide })  
+            new THREE.MeshStandardMaterial({ color: 0x457b9d, side: THREE.BackSide }), // Право
+            new THREE.MeshStandardMaterial({ color: 0xe63946, side: THREE.BackSide }), // Лево
+            new THREE.MeshStandardMaterial({ color: 0xeeeeee, side: THREE.BackSide }), // Потолок
+            new THREE.MeshStandardMaterial({ color: 0x1d3557, side: THREE.BackSide }), // Пол
+            new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, side: THREE.BackSide }), // Передняя невидимая
+            new THREE.MeshStandardMaterial({ color: 0xa8dadc, side: THREE.BackSide })  // Дальняя
         ];
         const room = new THREE.Mesh(roomGeo, roomMaterials);
         room.receiveShadow = true;
         room.position.z = -8; 
         scene.add(room);
 
+        // Декорации
         const grid = new THREE.GridHelper(12, 10, 0xffffff, 0xffffff);
         grid.material.opacity = 0.2; grid.material.transparent = true;
         grid.position.set(0, -3.99, -8);
@@ -166,35 +173,27 @@
         
         const LERP_FACTOR = 0.08;
 
-        let targetRotX = 0, targetRotY = 0;
-        let currentRotX = 0, currentRotY = 0;
+        // Переменные сглаживания
+        let targetRotX = 0, targetRotY = 0, currentRotX = 0, currentRotY = 0;
         let baseBeta = null, baseGamma = null;
-
-        let targetPosX = 0, targetPosY = 0;
-        let currentPosX = 0, currentPosY = 0;
-
-        // Цели для вращения самой камеры (от шеи)
+        let targetPosX = 0, targetPosY = 0, currentPosX = 0, currentPosY = 0;
         let targetHeadRotX = 0, targetHeadRotY = 0, targetHeadRotZ = 0;
         let currentHeadRotX = 0, currentHeadRotY = 0, currentHeadRotZ = 0;
 
-        const globalInput = document.getElementById('globalSens');
-        const faceInput = document.getElementById('faceSens');
-        const gyroInput = document.getElementById('gyroSens');
-        const headRotInput = document.getElementById('headRotSens');
-        
-        globalInput.addEventListener('input', (e) => {
+        // Привязка слайдеров интерфейса
+        document.getElementById('globalSens').addEventListener('input', (e) => {
             GLOBAL_SENSITIVITY = parseFloat(e.target.value);
             document.getElementById('globalVal').innerText = GLOBAL_SENSITIVITY.toFixed(1);
         });
-        faceInput.addEventListener('input', (e) => {
+        document.getElementById('faceSens').addEventListener('input', (e) => {
             FACE_SENSITIVITY = parseFloat(e.target.value);
             document.getElementById('faceVal').innerText = FACE_SENSITIVITY.toFixed(2);
         });
-        gyroInput.addEventListener('input', (e) => {
+        document.getElementById('gyroSens').addEventListener('input', (e) => {
             GYRO_SENSITIVITY = parseFloat(e.target.value);
             document.getElementById('gyroVal').innerText = GYRO_SENSITIVITY.toFixed(3);
         });
-        headRotInput.addEventListener('input', (e) => {
+        document.getElementById('headRotSens').addEventListener('input', (e) => {
             HEAD_ROT_SENSITIVITY = parseFloat(e.target.value);
             document.getElementById('headRotVal').innerText = HEAD_ROT_SENSITIVITY.toFixed(1);
         });
@@ -205,55 +204,65 @@
         const invertGyroX = document.getElementById('invertGyroX');
 
         /* ==========================================
-           3. ИНИЦИАЛИЗАЦИЯ
+           3. ПОШАГОВАЯ ИНИЦИАЛИЗАЦИЯ (ПО КЛИКУ)
            ========================================== */
         const video = document.getElementById('webcam');
         const startBtn = document.getElementById('startButton');
         const statusText = document.getElementById('status');
         let faceLandmarker, lastVideoTime = -1;
 
-        async function loadModels() {
+        startBtn.addEventListener('click', async () => {
+            startBtn.disabled = true;
+            
             try {
-                statusText.innerText = "Загрузка нейросети (CPU)...";
+                // ШАГ 1
+                statusText.innerText = "Шаг 1: Загрузка ядра (WASM)...";
                 const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
+                
+                // ШАГ 2
+                statusText.innerText = "Шаг 2: Скачивание нейросети (CPU режим)...";
                 faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
                     baseOptions: { 
                         modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`, 
-                        // МЕНЯЕМ GPU НА CPU ДЛЯ СТАБИЛЬНОСТИ НА СМАРТФОНАХ
-                        delegate: "CPU" 
+                        delegate: "CPU" // Вынужденная мера для мобильных браузеров
                     },
                     outputFaceBlendshapes: false, 
                     outputFacialTransformationMatrixes: true, 
                     runningMode: "VIDEO", 
                     numFaces: 1
                 });
-                statusText.innerText = "Нейросеть готова. Нажмите СТАРТ.";
-                statusText.style.color = "#2a9d8f";
-                startBtn.disabled = false;
+
+                // ШАГ 3
+                statusText.innerText = "Шаг 3: Настройка датчиков...";
+                if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    const permission = await DeviceOrientationEvent.requestPermission();
+                    if (permission === 'granted') initGyro();
+                } else {
+                    initGyro();
+                }
+
+                // ШАГ 4
+                statusText.innerText = "Шаг 4: Запуск камеры...";
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+                video.srcObject = stream;
+                
+                video.addEventListener("loadeddata", () => {
+                    predictWebcam();
+                    // Скрываем загрузочный экран
+                    document.getElementById('ui-container').style.opacity = '0';
+                    setTimeout(() => {
+                        document.getElementById('ui-container').style.display = 'none';
+                        document.getElementById('controls').style.display = 'block'; 
+                    }, 500);
+                });
+
             } catch (e) {
-                // Теперь мы выведем не просто слово "Ошибка", а саму причину сбоя
-                statusText.innerText = "Ошибка: " + e.message; 
+                // Вывод реальной ошибки на экран для дебага
+                statusText.innerText = "Сбой: " + e.message;
                 statusText.style.color = "#e63946";
-                console.error("Детали ошибки MediaPipe:", e);
+                startBtn.disabled = false;
+                console.error(e);
             }
-        }
-
-        startBtn.addEventListener('click', async () => {
-            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                try {
-                    if (await DeviceOrientationEvent.requestPermission() === 'granted') initGyro();
-                } catch (e) { console.error(e); }
-            } else initGyro();
-
-            navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
-                .then((stream) => { video.srcObject = stream; video.addEventListener("loadeddata", predictWebcam); })
-                .catch(() => alert("Без камеры работает только гироскоп."));
-
-            document.getElementById('ui-container').style.opacity = '0';
-            setTimeout(() => {
-                document.getElementById('ui-container').style.display = 'none';
-                document.getElementById('controls').style.display = 'block'; 
-            }, 500);
         });
 
         /* ==========================================
@@ -288,7 +297,7 @@
                 if (results.facialTransformationMatrixes && results.facialTransformationMatrixes.length > 0) {
                     const matrixArray = results.facialTransformationMatrixes[0].data;
                     
-                    // 1. Смещение тела (Translation)
+                    // 1. Смещение тела
                     let rawX = matrixArray[12] / 10; 
                     let rawY = matrixArray[13] / 10;
                     if (invertFaceX.checked) rawX = -rawX; 
@@ -297,11 +306,10 @@
                     targetPosX = rawX * FACE_SENSITIVITY * GLOBAL_SENSITIVITY;
                     targetPosY = rawY * FACE_SENSITIVITY * GLOBAL_SENSITIVITY;
 
-                    // 2. Вращение головы (Rotation) -> Вращение виртуальной камеры
+                    // 2. Вращение головы (передается камере)
                     const m4 = new THREE.Matrix4().fromArray(matrixArray);
                     const euler = new THREE.Euler().setFromRotationMatrix(m4);
 
-                    // Ось Y и Z инвертированы для естественного отклика взгляда
                     targetHeadRotX = euler.x * HEAD_ROT_SENSITIVITY * GLOBAL_SENSITIVITY;
                     targetHeadRotY = -euler.y * HEAD_ROT_SENSITIVITY * GLOBAL_SENSITIVITY; 
                     targetHeadRotZ = -euler.z * HEAD_ROT_SENSITIVITY * GLOBAL_SENSITIVITY;
@@ -316,23 +324,23 @@
         function animate() {
             requestAnimationFrame(animate);
 
-            // Артефакт просто красиво левитирует
+            // Декоративное вращение артефакта
             artifact.rotation.x += 0.01;
             artifact.rotation.y += 0.015;
 
-            // Вращение комнаты (Гироскоп)
+            // Вращение сцены (Гироскоп)
             currentRotX += (targetRotX - currentRotX) * LERP_FACTOR;
             currentRotY += (targetRotY - currentRotY) * LERP_FACTOR;
             cameraGroup.rotation.x = currentRotX;
             cameraGroup.rotation.y = currentRotY;
 
-            // Смещение позиции (Тело)
+            // Смещение камеры (Позиция тела)
             currentPosX += (targetPosX - currentPosX) * LERP_FACTOR;
             currentPosY += (targetPosY - currentPosY) * LERP_FACTOR;
             camera.position.x = currentPosX;
             camera.position.y = currentPosY;
 
-            // Вращение самой камеры (Повороты головы/шеи)
+            // Свободное вращение камеры (Повороты головы)
             currentHeadRotX += (targetHeadRotX - currentHeadRotX) * LERP_FACTOR;
             currentHeadRotY += (targetHeadRotY - currentHeadRotY) * LERP_FACTOR;
             currentHeadRotZ += (targetHeadRotZ - currentHeadRotZ) * LERP_FACTOR;
