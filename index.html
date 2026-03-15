@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Ultimate 3D Parallax: Face + Gyro</title>
+    <title>3D Parallax: Калибровка</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; touch-action: none; }
         canvas { display: block; }
@@ -11,27 +11,39 @@
         #ui-container {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; flex-direction: column; justify-content: center; align-items: center;
-            background: rgba(0, 0, 0, 0.85); z-index: 10; color: white; text-align: center;
+            background: rgba(0, 0, 0, 0.85); z-index: 20; color: white; text-align: center;
             backdrop-filter: blur(8px); transition: opacity 0.5s;
         }
         #ui-container h1 { margin-bottom: 10px; font-size: 26px; }
         #ui-container p { margin-bottom: 30px; color: #ccc; max-width: 80%; line-height: 1.5; }
         
-        button {
+        button#startButton {
             padding: 15px 40px; font-size: 18px; font-weight: bold; color: #fff;
             background: #2a9d8f; border: none; border-radius: 8px; cursor: pointer;
             box-shadow: 0 4px 15px rgba(42, 157, 143, 0.4); transition: transform 0.2s;
         }
-        button:active { transform: scale(0.95); }
-        button:disabled { background: #555; cursor: not-allowed; box-shadow: none; }
+        button#startButton:active { transform: scale(0.95); }
+        button#startButton:disabled { background: #555; cursor: not-allowed; box-shadow: none; }
 
-        /* Маленькое превью камеры для контроля */
+        /* Панель настроек внизу экрана */
+        #controls {
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            background: rgba(20, 20, 20, 0.85); padding: 15px 20px; box-sizing: border-box;
+            border-top: 1px solid #444; color: white; z-index: 10; display: none;
+            backdrop-filter: blur(5px); font-size: 14px;
+        }
+        .control-group { margin-bottom: 12px; display: flex; flex-direction: column; }
+        .control-group label { margin-bottom: 5px; display: flex; justify-content: space-between; }
+        .control-group input[type="range"] { width: 100%; }
+        .checkbox-group { display: flex; align-items: center; margin-bottom: 8px; }
+        .checkbox-group input { margin-right: 10px; width: 18px; height: 18px; }
+
+        /* Маленькое превью камеры */
         #webcam { 
-            position: absolute; bottom: 15px; right: 15px; 
-            width: 120px; height: 90px; 
+            position: absolute; top: 15px; right: 15px; 
+            width: 100px; height: 75px; 
             transform: scaleX(-1); border: 2px solid rgba(255,255,255,0.3); 
-            border-radius: 8px; background: #222; z-index: 5;
-            object-fit: cover;
+            border-radius: 8px; background: #222; z-index: 5; object-fit: cover;
         }
         #status { color: #e9c46a; font-weight: bold; margin-bottom: 20px; height: 20px; }
     </style>
@@ -40,28 +52,45 @@
 <body>
 
     <div id="ui-container">
-        <h1>Полное погружение</h1>
-        <p>Держите телефон ровно перед лицом. Разрешите доступ к камере и гироскопу.</p>
+        <h1>Калибровка сенсоров</h1>
+        <p>Разрешите доступ к камере и гироскопу. После старта используйте ползунки внизу экрана.</p>
         <div id="status">Загрузка нейросети...</div>
         <button id="startButton" disabled>СТАРТ</button>
     </div>
 
     <video id="webcam" autoplay playsinline></video>
 
+    <div id="controls">
+        <div class="control-group">
+            <label><span>Чувств. лица (MediaPipe):</span> <span id="faceVal">3.0</span></label>
+            <input type="range" id="faceSens" min="0" max="10" step="0.1" value="3.0">
+        </div>
+        <div class="control-group">
+            <label><span>Чувств. гироскопа:</span> <span id="gyroVal">0.015</span></label>
+            <input type="range" id="gyroSens" min="0" max="0.05" step="0.001" value="0.015">
+        </div>
+        <div class="checkbox-group">
+            <input type="checkbox" id="invertFaceX" checked>
+            <label for="invertFaceX">Инвертировать лицо (Ось X)</label>
+        </div>
+        <div class="checkbox-group">
+            <input type="checkbox" id="invertGyroY">
+            <label for="invertGyroY">Инвертировать гироскоп (Влево/Вправо)</label>
+        </div>
+    </div>
+
     <script type="module">
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
 
         /* ==========================================
-           1. НАСТРОЙКА 3D СЦЕНЫ
+           1. НАСТРОЙКА 3D СЦЕНЫ И КОМНАТЫ
            ========================================== */
         const scene = new THREE.Scene();
 
-        // Создаем группу "Голова" (для гироскопа) и саму камеру (для лица)
         const cameraGroup = new THREE.Group();
         scene.add(cameraGroup);
-
         const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 100);
-        cameraGroup.add(camera); // Камера теперь внутри группы
+        cameraGroup.add(camera);
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -69,17 +98,14 @@
         renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
 
-        /* ==========================================
-           2. СОЗДАЕМ ДИОРАМУ (КОМНАТУ)
-           ========================================== */
         const roomGeo = new THREE.BoxGeometry(12, 8, 16);
         const roomMaterials = [
-            new THREE.MeshStandardMaterial({ color: 0x457b9d, side: THREE.BackSide }), // Право
-            new THREE.MeshStandardMaterial({ color: 0xe63946, side: THREE.BackSide }), // Лево
-            new THREE.MeshStandardMaterial({ color: 0xeeeeee, side: THREE.BackSide }), // Верх
-            new THREE.MeshStandardMaterial({ color: 0x1d3557, side: THREE.BackSide }), // Низ
-            new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, side: THREE.BackSide }), // Перед (невидимый)
-            new THREE.MeshStandardMaterial({ color: 0xa8dadc, side: THREE.BackSide })  // Тыл
+            new THREE.MeshStandardMaterial({ color: 0x457b9d, side: THREE.BackSide }), 
+            new THREE.MeshStandardMaterial({ color: 0xe63946, side: THREE.BackSide }), 
+            new THREE.MeshStandardMaterial({ color: 0xeeeeee, side: THREE.BackSide }), 
+            new THREE.MeshStandardMaterial({ color: 0x1d3557, side: THREE.BackSide }), 
+            new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, side: THREE.BackSide }), 
+            new THREE.MeshStandardMaterial({ color: 0xa8dadc, side: THREE.BackSide })  
         ];
         const room = new THREE.Mesh(roomGeo, roomMaterials);
         room.receiveShadow = true;
@@ -91,7 +117,6 @@
         grid.position.set(0, -3.99, -8);
         scene.add(grid);
 
-        // Центральный объект
         const artifactGeo = new THREE.TorusKnotGeometry(1, 0.3, 100, 16);
         const artifactMat = new THREE.MeshStandardMaterial({ color: 0xffb703, metalness: 0.8, roughness: 0.2 });
         const artifact = new THREE.Mesh(artifactGeo, artifactMat);
@@ -99,7 +124,6 @@
         artifact.castShadow = true;
         scene.add(artifact);
 
-        // Освещение
         scene.add(new THREE.AmbientLight(0xffffff, 0.5));
         const spotLight = new THREE.SpotLight(0xffffff, 1.5);
         spotLight.position.set(0, 3, -4);
@@ -107,24 +131,38 @@
         scene.add(spotLight);
 
         /* ==========================================
-           3. ПЕРЕМЕННЫЕ ДЛЯ ДАТЧИКОВ
+           2. ПЕРЕМЕННЫЕ И ЭЛЕМЕНТЫ УПРАВЛЕНИЯ
            ========================================== */
-        // Цели для гироскопа (Вращение)
         let targetRotX = 0, targetRotY = 0;
         let currentRotX = 0, currentRotY = 0;
         let baseBeta = null, baseGamma = null;
 
-        // Цели для MediaPipe (Смещение)
         let targetPosX = 0, targetPosY = 0;
         let currentPosX = 0, currentPosY = 0;
 
-        // Настройки чувствительности
-        const GYRO_SENSITIVITY = 0.015; // Радианы вращения
-        const FACE_SENSITIVITY = 3.0;   // Единицы смещения в 3D
+        // Делаем настройки изменяемыми (let вместо const)
+        let GYRO_SENSITIVITY = 0.015; 
+        let FACE_SENSITIVITY = 3.0;   
         const LERP_FACTOR = 0.08;
 
+        // Привязываем UI
+        const faceInput = document.getElementById('faceSens');
+        const gyroInput = document.getElementById('gyroSens');
+        const invertFaceCheckbox = document.getElementById('invertFaceX');
+        const invertGyroCheckbox = document.getElementById('invertGyroY');
+        
+        faceInput.addEventListener('input', (e) => {
+            FACE_SENSITIVITY = parseFloat(e.target.value);
+            document.getElementById('faceVal').innerText = FACE_SENSITIVITY.toFixed(1);
+        });
+        
+        gyroInput.addEventListener('input', (e) => {
+            GYRO_SENSITIVITY = parseFloat(e.target.value);
+            document.getElementById('gyroVal').innerText = GYRO_SENSITIVITY.toFixed(3);
+        });
+
         /* ==========================================
-           4. ИНИЦИАЛИЗАЦИЯ MEDIAPIPE И КАМЕРЫ
+           3. ИНИЦИАЛИЗАЦИЯ И ЗАПУСК
            ========================================== */
         const video = document.getElementById('webcam');
         const startBtn = document.getElementById('startButton');
@@ -134,17 +172,10 @@
 
         async function loadModels() {
             try {
-                const vision = await FilesetResolver.forVisionTasks(
-                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
-                );
+                const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
                 faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-                    baseOptions: {
-                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
-                        delegate: "GPU"
-                    },
-                    outputFaceBlendshapes: false,
-                    runningMode: "VIDEO",
-                    numFaces: 1
+                    baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`, delegate: "GPU" },
+                    outputFaceBlendshapes: false, runningMode: "VIDEO", numFaces: 1
                 });
                 statusText.innerText = "Нейросеть готова. Нажмите СТАРТ.";
                 statusText.style.color = "#2a9d8f";
@@ -154,15 +185,9 @@
                 statusText.style.color = "#e63946";
             }
         }
-
-        // Запускаем загрузку моделей сразу
         loadModels();
 
-        /* ==========================================
-           5. КНОПКА СТАРТ: ЗАПУСК ВСЕХ СИСТЕМ
-           ========================================== */
         startBtn.addEventListener('click', async () => {
-            // 1. Запрос гироскопа (iOS)
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 try {
                     const permission = await DeviceOrientationEvent.requestPermission();
@@ -172,45 +197,37 @@
                 initGyro();
             }
 
-            // 2. Запуск веб-камеры
             navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
                 .then((stream) => {
                     video.srcObject = stream;
-                    video.addEventListener("loadeddata", () => {
-                        predictWebcam();
-                    });
-                })
-                .catch((err) => {
-                    alert("Без камеры будет работать только гироскоп.");
-                });
+                    video.addEventListener("loadeddata", () => predictWebcam());
+                }).catch(() => alert("Без камеры будет работать только гироскоп."));
 
             document.getElementById('ui-container').style.opacity = '0';
-            setTimeout(() => document.getElementById('ui-container').style.display = 'none', 500);
+            setTimeout(() => {
+                document.getElementById('ui-container').style.display = 'none';
+                document.getElementById('controls').style.display = 'block'; // Показываем панель
+            }, 500);
         });
 
         /* ==========================================
-           6. ЛОГИКА ДАТЧИКОВ
+           4. ЛОГИКА ДАТЧИКОВ (С УЧЕТОМ НАСТРОЕК)
            ========================================== */
         function initGyro() {
             window.addEventListener('deviceorientation', (event) => {
-                if (baseBeta === null) {
-                    baseBeta = event.beta;
-                    baseGamma = event.gamma;
-                }
+                if (baseBeta === null) { baseBeta = event.beta; baseGamma = event.gamma; }
                 if (event.beta !== null && event.gamma !== null) {
                     let deltaBeta = event.beta - baseBeta;
                     let deltaGamma = event.gamma - baseGamma;
 
                     if (deltaGamma > 180) deltaGamma -= 360;
                     if (deltaGamma < -180) deltaGamma += 360;
-
                     deltaBeta = Math.max(-35, Math.min(35, deltaBeta));
                     deltaGamma = Math.max(-40, Math.min(40, deltaGamma));
 
-                    // Гироскоп задает целевое ВРАЩЕНИЕ группы (в радианах)
-                    // Наклон телефона влево-вправо вращает камеру по оси Y
-                    targetRotY = -deltaGamma * GYRO_SENSITIVITY;
-                    // Наклон вверх-вниз вращает камеру по оси X
+                    // Учитываем галочку инверсии гироскопа
+                    let gyroDirY = invertGyroCheckbox.checked ? 1 : -1;
+                    targetRotY = gyroDirY * deltaGamma * GYRO_SENSITIVITY;
                     targetRotX = -deltaBeta * GYRO_SENSITIVITY;
                 }
             });
@@ -223,11 +240,16 @@
                 
                 if (results.faceLandmarks.length > 0) {
                     const nose = results.faceLandmarks[0][1];
-                    const mappedX = ((1 - nose.x) - 0.5) * 2; 
+                    
+                    // Учитываем галочку инверсии для оси X лица
+                    let rawX = (nose.x - 0.5) * 2; 
+                    if (invertFaceCheckbox.checked) {
+                        rawX = -rawX; 
+                    }
+                    
                     const mappedY = -(nose.y - 0.5) * 2; 
 
-                    // Камера задает целевое СМЕЩЕНИЕ внутри группы
-                    targetPosX = mappedX * FACE_SENSITIVITY;
+                    targetPosX = rawX * FACE_SENSITIVITY;
                     targetPosY = mappedY * FACE_SENSITIVITY;
                 }
             }
@@ -235,22 +257,19 @@
         }
 
         /* ==========================================
-           7. АНИМАЦИЯ И РЕНДЕР
+           5. АНИМАЦИЯ И РЕНДЕР
            ========================================== */
         function animate() {
             requestAnimationFrame(animate);
 
-            // Анимация артефакта
             artifact.rotation.x += 0.01;
             artifact.rotation.y += 0.015;
 
-            // 1. Сглаживание и применение гироскопа (Вращение группы)
             currentRotX += (targetRotX - currentRotX) * LERP_FACTOR;
             currentRotY += (targetRotY - currentRotY) * LERP_FACTOR;
             cameraGroup.rotation.x = currentRotX;
             cameraGroup.rotation.y = currentRotY;
 
-            // 2. Сглаживание и применение камеры (Смещение самой камеры)
             currentPosX += (targetPosX - currentPosX) * LERP_FACTOR;
             currentPosY += (targetPosY - currentPosY) * LERP_FACTOR;
             camera.position.x = currentPosX;
