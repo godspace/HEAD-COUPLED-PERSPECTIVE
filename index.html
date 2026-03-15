@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>3D Parallax: Калибровка</title>
+    <title>3D Parallax: Полная Калибровка</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; touch-action: none; }
         canvas { display: block; }
@@ -27,16 +27,24 @@
 
         /* Панель настроек внизу экрана */
         #controls {
-            position: absolute; bottom: 0; left: 0; width: 100%;
-            background: rgba(20, 20, 20, 0.85); padding: 15px 20px; box-sizing: border-box;
+            position: absolute; bottom: 0; left: 0; width: 100%; height: 40%;
+            background: rgba(20, 20, 20, 0.85); padding: 10px 15px; box-sizing: border-box;
             border-top: 1px solid #444; color: white; z-index: 10; display: none;
-            backdrop-filter: blur(5px); font-size: 14px;
+            backdrop-filter: blur(5px); font-size: 13px; overflow-y: auto;
         }
-        .control-group { margin-bottom: 12px; display: flex; flex-direction: column; }
-        .control-group label { margin-bottom: 5px; display: flex; justify-content: space-between; }
+        .control-group { margin-bottom: 10px; display: flex; flex-direction: column; }
+        .control-group label { margin-bottom: 4px; display: flex; justify-content: space-between; }
         .control-group input[type="range"] { width: 100%; }
-        .checkbox-group { display: flex; align-items: center; margin-bottom: 8px; }
-        .checkbox-group input { margin-right: 10px; width: 18px; height: 18px; }
+        .checkbox-group { display: flex; align-items: center; margin-bottom: 6px; }
+        .checkbox-group input { margin-right: 8px; width: 16px; height: 16px; }
+
+        /* Сетка для чекбоксов, чтобы было компактнее */
+        .checkbox-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 5px;
+            margin-top: 10px;
+        }
 
         /* Маленькое превью камеры */
         #webcam { 
@@ -52,8 +60,8 @@
 <body>
 
     <div id="ui-container">
-        <h1>Калибровка сенсоров</h1>
-        <p>Разрешите доступ к камере и гироскопу. После старта используйте ползунки внизу экрана.</p>
+        <h1>Полная калибровка</h1>
+        <p>Разрешите доступ к камере и гироскопу. После старта настройте все 4 оси.</p>
         <div id="status">Загрузка нейросети...</div>
         <button id="startButton" disabled>СТАРТ</button>
     </div>
@@ -69,13 +77,25 @@
             <label><span>Чувств. гироскопа:</span> <span id="gyroVal">0.015</span></label>
             <input type="range" id="gyroSens" min="0" max="0.05" step="0.001" value="0.015">
         </div>
-        <div class="checkbox-group">
-            <input type="checkbox" id="invertFaceX" checked>
-            <label for="invertFaceX">Инвертировать лицо (Ось X)</label>
-        </div>
-        <div class="checkbox-group">
-            <input type="checkbox" id="invertGyroY">
-            <label for="invertGyroY">Инвертировать гироскоп (Влево/Вправо)</label>
+        
+        <div class="checkbox-grid">
+            <div class="checkbox-group">
+                <input type="checkbox" id="invertFaceX" checked>
+                <label for="invertFaceX">Лицо X (Влево/Вправо)</label>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="invertFaceY">
+                <label for="invertFaceY">Лицо Y (Вверх/Вниз)</label>
+            </div>
+            
+            <div class="checkbox-group">
+                <input type="checkbox" id="invertGyroY">
+                <label for="invertGyroY">Гироскоп Y (Влево/Вправо)</label>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="invertGyroX">
+                <label for="invertGyroX">Гироскоп X (Вверх/Вниз)</label>
+            </div>
         </div>
     </div>
 
@@ -140,7 +160,6 @@
         let targetPosX = 0, targetPosY = 0;
         let currentPosX = 0, currentPosY = 0;
 
-        // Делаем настройки изменяемыми (let вместо const)
         let GYRO_SENSITIVITY = 0.015; 
         let FACE_SENSITIVITY = 3.0;   
         const LERP_FACTOR = 0.08;
@@ -148,8 +167,11 @@
         // Привязываем UI
         const faceInput = document.getElementById('faceSens');
         const gyroInput = document.getElementById('gyroSens');
-        const invertFaceCheckbox = document.getElementById('invertFaceX');
-        const invertGyroCheckbox = document.getElementById('invertGyroY');
+        
+        const invertFaceXCheckbox = document.getElementById('invertFaceX');
+        const invertFaceYCheckbox = document.getElementById('invertFaceY');
+        const invertGyroYCheckbox = document.getElementById('invertGyroY');
+        const invertGyroXCheckbox = document.getElementById('invertGyroX');
         
         faceInput.addEventListener('input', (e) => {
             FACE_SENSITIVITY = parseFloat(e.target.value);
@@ -206,7 +228,7 @@
             document.getElementById('ui-container').style.opacity = '0';
             setTimeout(() => {
                 document.getElementById('ui-container').style.display = 'none';
-                document.getElementById('controls').style.display = 'block'; // Показываем панель
+                document.getElementById('controls').style.display = 'block'; 
             }, 500);
         });
 
@@ -225,10 +247,12 @@
                     deltaBeta = Math.max(-35, Math.min(35, deltaBeta));
                     deltaGamma = Math.max(-40, Math.min(40, deltaGamma));
 
-                    // Учитываем галочку инверсии гироскопа
-                    let gyroDirY = invertGyroCheckbox.checked ? 1 : -1;
+                    // Учитываем галочки инверсии гироскопа
+                    let gyroDirY = invertGyroYCheckbox.checked ? 1 : -1;
+                    let gyroDirX = invertGyroXCheckbox.checked ? 1 : -1;
+
                     targetRotY = gyroDirY * deltaGamma * GYRO_SENSITIVITY;
-                    targetRotX = -deltaBeta * GYRO_SENSITIVITY;
+                    targetRotX = gyroDirX * deltaBeta * GYRO_SENSITIVITY;
                 }
             });
         }
@@ -241,16 +265,15 @@
                 if (results.faceLandmarks.length > 0) {
                     const nose = results.faceLandmarks[0][1];
                     
-                    // Учитываем галочку инверсии для оси X лица
+                    // Учитываем галочки инверсии для лица
                     let rawX = (nose.x - 0.5) * 2; 
-                    if (invertFaceCheckbox.checked) {
-                        rawX = -rawX; 
-                    }
+                    if (invertFaceXCheckbox.checked) rawX = -rawX; 
                     
-                    const mappedY = -(nose.y - 0.5) * 2; 
+                    let rawY = -(nose.y - 0.5) * 2; 
+                    if (invertFaceYCheckbox.checked) rawY = -rawY;
 
                     targetPosX = rawX * FACE_SENSITIVITY;
-                    targetPosY = mappedY * FACE_SENSITIVITY;
+                    targetPosY = rawY * FACE_SENSITIVITY;
                 }
             }
             requestAnimationFrame(predictWebcam);
