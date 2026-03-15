@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>3D Parallax: Настоящий 6DoF</title>
+    <title>3D Parallax: Телекинез и Мастер-Слайдер</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; touch-action: none; }
         canvas { display: block; }
@@ -25,20 +25,25 @@
         button#startButton:active { transform: scale(0.95); }
         button#startButton:disabled { background: #555; cursor: not-allowed; box-shadow: none; }
 
+        /* Панель настроек (немного увеличена высота) */
         #controls {
-            position: absolute; bottom: 0; left: 0; width: 100%; height: 40%;
+            position: absolute; bottom: 0; left: 0; width: 100%; height: 45%;
             background: rgba(20, 20, 20, 0.85); padding: 10px 15px; box-sizing: border-box;
             border-top: 1px solid #444; color: white; z-index: 10; display: none;
             backdrop-filter: blur(5px); font-size: 13px; overflow-y: auto;
         }
-        .control-group { margin-bottom: 10px; display: flex; flex-direction: column; }
-        .control-group label { margin-bottom: 4px; display: flex; justify-content: space-between; }
+        .control-group { margin-bottom: 8px; display: flex; flex-direction: column; }
+        .control-group label { margin-bottom: 4px; display: flex; justify-content: space-between; color: #ddd; }
         .control-group input[type="range"] { width: 100%; }
+        
+        /* Выделяем мастер-слайдер цветом */
+        .master-group label { color: #e9c46a; font-weight: bold; }
+        
         .checkbox-group { display: flex; align-items: center; margin-bottom: 6px; }
         .checkbox-group input { margin-right: 8px; width: 16px; height: 16px; }
 
         .checkbox-grid {
-            display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 10px;
+            display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 8px;
         }
 
         #webcam { 
@@ -53,8 +58,8 @@
 <body>
 
     <div id="ui-container">
-        <h1>Матрица смещения (6DoF)</h1>
-        <p>Система теперь отличает физическое смещение тела от поворота головы.</p>
+        <h1>Полный контроль</h1>
+        <p>Мастер-слайдер для всей сцены и телекинез артефакта поворотом головы.</p>
         <div id="status">Загрузка нейросети...</div>
         <button id="startButton" disabled>СТАРТ</button>
     </div>
@@ -62,12 +67,23 @@
     <video id="webcam" autoplay playsinline></video>
 
     <div id="controls">
+        <div class="control-group master-group">
+            <label><span>ОБЩАЯ ЧУВСТВИТЕЛЬНОСТЬ:</span> <span id="globalVal">1.0</span></label>
+            <input type="range" id="globalSens" min="0" max="3" step="0.1" value="1.0">
+        </div>
+        
         <div class="control-group">
-            <label><span>Чувств. смещения (Тело):</span> <span id="faceVal">0.3</span></label>
+            <label><span>Поворот головы (Артефакт):</span> <span id="headRotVal">1.0</span></label>
+            <input type="range" id="headRotSens" min="0" max="3" step="0.1" value="1.0">
+        </div>
+
+        <div class="control-group">
+            <label><span>Смещение тела (Камера):</span> <span id="faceVal">0.3</span></label>
             <input type="range" id="faceSens" min="0" max="1.0" step="0.01" value="0.3">
         </div>
+        
         <div class="control-group">
-            <label><span>Чувств. гироскопа:</span> <span id="gyroVal">0.015</span></label>
+            <label><span>Наклон телефона (Гироскоп):</span> <span id="gyroVal">0.015</span></label>
             <input type="range" id="gyroSens" min="0" max="0.05" step="0.001" value="0.015">
         </div>
         
@@ -80,7 +96,6 @@
                 <input type="checkbox" id="invertFaceY">
                 <label for="invertFaceY">Лицо Y (Вверх/Вниз)</label>
             </div>
-            
             <div class="checkbox-group">
                 <input type="checkbox" id="invertGyroY" checked>
                 <label for="invertGyroY">Гироскоп Y (Влево/Вправо)</label>
@@ -96,7 +111,7 @@
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
 
         /* ==========================================
-           1. НАСТРОЙКА 3D СЦЕНЫ
+           1. НАСТРОЙКА СЦЕНЫ
            ========================================== */
         const scene = new THREE.Scene();
 
@@ -146,6 +161,16 @@
         /* ==========================================
            2. ПЕРЕМЕННЫЕ УПРАВЛЕНИЯ
            ========================================== */
+        // Мастер-множитель
+        let GLOBAL_SENSITIVITY = 1.0; 
+        
+        let GYRO_SENSITIVITY = 0.015; 
+        let FACE_SENSITIVITY = 0.3;   
+        let HEAD_ROT_SENSITIVITY = 1.0; // Чувствительность вращения артефакта
+        
+        const LERP_FACTOR = 0.08;
+
+        // Цели гироскопа и смещения
         let targetRotX = 0, targetRotY = 0;
         let currentRotX = 0, currentRotY = 0;
         let baseBeta = null, baseGamma = null;
@@ -153,52 +178,58 @@
         let targetPosX = 0, targetPosY = 0;
         let currentPosX = 0, currentPosY = 0;
 
-        let GYRO_SENSITIVITY = 0.015; 
-        // Базовая чувствительность для матрицы трансформации ниже (так как сырые числа там больше)
-        let FACE_SENSITIVITY = 0.3;   
-        const LERP_FACTOR = 0.08;
+        // Цели для артефакта (телекинез)
+        let targetArtifactRotX = 0, targetArtifactRotY = 0, targetArtifactRotZ = 0;
+        let currentArtifactRotX = 0, currentArtifactRotY = 0, currentArtifactRotZ = 0;
 
+        // Привязка UI
+        const globalInput = document.getElementById('globalSens');
         const faceInput = document.getElementById('faceSens');
         const gyroInput = document.getElementById('gyroSens');
-        const invertFaceXCheckbox = document.getElementById('invertFaceX');
-        const invertFaceYCheckbox = document.getElementById('invertFaceY');
-        const invertGyroYCheckbox = document.getElementById('invertGyroY');
-        const invertGyroXCheckbox = document.getElementById('invertGyroX');
+        const headRotInput = document.getElementById('headRotSens');
         
+        globalInput.addEventListener('input', (e) => {
+            GLOBAL_SENSITIVITY = parseFloat(e.target.value);
+            document.getElementById('globalVal').innerText = GLOBAL_SENSITIVITY.toFixed(1);
+        });
         faceInput.addEventListener('input', (e) => {
             FACE_SENSITIVITY = parseFloat(e.target.value);
             document.getElementById('faceVal').innerText = FACE_SENSITIVITY.toFixed(2);
         });
-        
         gyroInput.addEventListener('input', (e) => {
             GYRO_SENSITIVITY = parseFloat(e.target.value);
             document.getElementById('gyroVal').innerText = GYRO_SENSITIVITY.toFixed(3);
         });
+        headRotInput.addEventListener('input', (e) => {
+            HEAD_ROT_SENSITIVITY = parseFloat(e.target.value);
+            document.getElementById('headRotVal').innerText = HEAD_ROT_SENSITIVITY.toFixed(1);
+        });
+
+        const invertFaceX = document.getElementById('invertFaceX');
+        const invertFaceY = document.getElementById('invertFaceY');
+        const invertGyroY = document.getElementById('invertGyroY');
+        const invertGyroX = document.getElementById('invertGyroX');
 
         /* ==========================================
-           3. ИНИЦИАЛИЗАЦИЯ И ЗАПУСК
+           3. ИНИЦИАЛИЗАЦИЯ
            ========================================== */
         const video = document.getElementById('webcam');
         const startBtn = document.getElementById('startButton');
         const statusText = document.getElementById('status');
-        let faceLandmarker;
-        let lastVideoTime = -1;
+        let faceLandmarker, lastVideoTime = -1;
 
         async function loadModels() {
             try {
                 const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
                 faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
                     baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`, delegate: "GPU" },
-                    outputFaceBlendshapes: false, 
-                    outputFacialTransformationMatrixes: true, // Включаем матрицу 6DoF
-                    runningMode: "VIDEO", numFaces: 1
+                    outputFaceBlendshapes: false, outputFacialTransformationMatrixes: true, runningMode: "VIDEO", numFaces: 1
                 });
                 statusText.innerText = "Нейросеть готова. Нажмите СТАРТ.";
                 statusText.style.color = "#2a9d8f";
                 startBtn.disabled = false;
             } catch (e) {
-                statusText.innerText = "Ошибка загрузки нейросети.";
-                statusText.style.color = "#e63946";
+                statusText.innerText = "Ошибка."; statusText.style.color = "#e63946";
             }
         }
         loadModels();
@@ -206,18 +237,13 @@
         startBtn.addEventListener('click', async () => {
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 try {
-                    const permission = await DeviceOrientationEvent.requestPermission();
-                    if (permission === 'granted') initGyro();
+                    if (await DeviceOrientationEvent.requestPermission() === 'granted') initGyro();
                 } catch (e) { console.error(e); }
-            } else {
-                initGyro();
-            }
+            } else initGyro();
 
             navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
-                .then((stream) => {
-                    video.srcObject = stream;
-                    video.addEventListener("loadeddata", () => predictWebcam());
-                }).catch(() => alert("Без камеры будет работать только гироскоп."));
+                .then((stream) => { video.srcObject = stream; video.addEventListener("loadeddata", predictWebcam); })
+                .catch(() => alert("Без камеры работает только гироскоп."));
 
             document.getElementById('ui-container').style.opacity = '0';
             setTimeout(() => {
@@ -241,11 +267,12 @@
                     deltaBeta = Math.max(-35, Math.min(35, deltaBeta));
                     deltaGamma = Math.max(-40, Math.min(40, deltaGamma));
 
-                    let gyroDirY = invertGyroYCheckbox.checked ? 1 : -1;
-                    let gyroDirX = invertGyroXCheckbox.checked ? 1 : -1;
+                    let dirY = invertGyroY.checked ? 1 : -1;
+                    let dirX = invertGyroX.checked ? 1 : -1;
 
-                    targetRotY = gyroDirY * deltaGamma * GYRO_SENSITIVITY;
-                    targetRotX = gyroDirX * deltaBeta * GYRO_SENSITIVITY;
+                    // УМНОЖАЕМ НА ГЛОБАЛЬНУЮ ЧУВСТВИТЕЛЬНОСТЬ
+                    targetRotY = dirY * deltaGamma * GYRO_SENSITIVITY * GLOBAL_SENSITIVITY;
+                    targetRotX = dirX * deltaBeta * GYRO_SENSITIVITY * GLOBAL_SENSITIVITY;
                 }
             });
         }
@@ -255,20 +282,29 @@
                 lastVideoTime = video.currentTime;
                 const results = faceLandmarker.detectForVideo(video, performance.now());
                 
-                // Проверяем наличие матрицы трансформации
                 if (results.facialTransformationMatrixes && results.facialTransformationMatrixes.length > 0) {
-                    // Получаем массив из 16 элементов матрицы
-                    const matrix = results.facialTransformationMatrixes[0].data;
+                    const matrixArray = results.facialTransformationMatrixes[0].data;
                     
-                    // Индексы 12 и 13 в матрице отвечают исключительно за физическое смещение по осям X и Y
-                    let rawX = matrix[12] / 10; // Делим на 10 для нормализации масштаба
-                    let rawY = matrix[13] / 10;
+                    // --- 1. СМЕЩЕНИЕ ТЕЛА (Translation) ---
+                    let rawX = matrixArray[12] / 10; 
+                    let rawY = matrixArray[13] / 10;
+                    if (invertFaceX.checked) rawX = -rawX; 
+                    if (invertFaceY.checked) rawY = -rawY;
 
-                    if (invertFaceXCheckbox.checked) rawX = -rawX; 
-                    if (invertFaceYCheckbox.checked) rawY = -rawY;
+                    // УМНОЖАЕМ НА ГЛОБАЛЬНУЮ ЧУВСТВИТЕЛЬНОСТЬ
+                    targetPosX = rawX * FACE_SENSITIVITY * GLOBAL_SENSITIVITY;
+                    targetPosY = rawY * FACE_SENSITIVITY * GLOBAL_SENSITIVITY;
 
-                    targetPosX = rawX * FACE_SENSITIVITY;
-                    targetPosY = rawY * FACE_SENSITIVITY;
+                    // --- 2. ВРАЩЕНИЕ ГОЛОВЫ (Rotation) для артефакта ---
+                    // Преобразуем плоский массив MediaPipe в матрицу Three.js
+                    const m4 = new THREE.Matrix4().fromArray(matrixArray);
+                    // Достаем из матрицы углы Эйлера (Pitch, Yaw, Roll)
+                    const euler = new THREE.Euler().setFromRotationMatrix(m4);
+
+                    // Передаем углы головы артефакту (умножаем на настройки)
+                    targetArtifactRotX = euler.x * HEAD_ROT_SENSITIVITY * GLOBAL_SENSITIVITY;
+                    targetArtifactRotY = -euler.y * HEAD_ROT_SENSITIVITY * GLOBAL_SENSITIVITY; 
+                    targetArtifactRotZ = -euler.z * HEAD_ROT_SENSITIVITY * GLOBAL_SENSITIVITY;
                 }
             }
             requestAnimationFrame(predictWebcam);
@@ -280,14 +316,19 @@
         function animate() {
             requestAnimationFrame(animate);
 
-            artifact.rotation.x += 0.01;
-            artifact.rotation.y += 0.015;
+            // Плавное вращение артефакта вслед за вашей шеей
+            currentArtifactRotX += (targetArtifactRotX - currentArtifactRotX) * LERP_FACTOR;
+            currentArtifactRotY += (targetArtifactRotY - currentArtifactRotY) * LERP_FACTOR;
+            currentArtifactRotZ += (targetArtifactRotZ - currentArtifactRotZ) * LERP_FACTOR;
+            artifact.rotation.set(currentArtifactRotX, currentArtifactRotY, currentArtifactRotZ);
 
+            // Плавное вращение комнаты (Гироскоп)
             currentRotX += (targetRotX - currentRotX) * LERP_FACTOR;
             currentRotY += (targetRotY - currentRotY) * LERP_FACTOR;
             cameraGroup.rotation.x = currentRotX;
             cameraGroup.rotation.y = currentRotY;
 
+            // Плавное смещение камеры (Позиция тела)
             currentPosX += (targetPosX - currentPosX) * LERP_FACTOR;
             currentPosY += (targetPosY - currentPosY) * LERP_FACTOR;
             camera.position.x = currentPosX;
