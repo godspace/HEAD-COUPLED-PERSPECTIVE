@@ -225,7 +225,7 @@
                 faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
                     baseOptions: { 
                         // ИСПОЛЬЗУЕМ ЗЕРКАЛО ДЛЯ ФАЙЛА НЕЙРОСЕТИ
-                        modelAssetPath: `https://raw.githubusercontent.com/google/mediapipe/master/docs/solutions/models/face_landmarker.task`, 
+                        modelAssetPath: `face_landmarker.task`, 
                         delegate: "CPU"
                     },
                     outputFaceBlendshapes: false, 
