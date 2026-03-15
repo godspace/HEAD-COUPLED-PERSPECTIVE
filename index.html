@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Head Tracking Parallax (X, Y, Z)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
+        canvas { display: block; }
+        #ui { position: absolute; top: 15px; left: 15px; color: white; pointer-events: none; text-shadow: 1px 1px 2px black; }
+        /* Видео с веб-камеры в углу для отладки */
+        #webcam { 
+            position: absolute; bottom: 15px; right: 15px; 
+            width: 160px; height: 120px; 
+            transform: scaleX(-1); /* Отзеркаливаем для удобства */
+            border: 2px solid rgba(255, 255, 255, 0.5); 
+            border-radius: 8px;
+            background: #222;
+        }
+        #loading { color: #ffaa00; font-weight: bold; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="ui">
+        <h2>3D Портал (Отслеживание X, Y, Z)</h2>
+        <p id="loading">Загрузка нейросети и включение камеры...</p>
+        <p>Двигайте головой влево/вправо и приближайтесь к экрану.</p>
+    </div>
+
+    <video id="webcam" autoplay playsinline></video>
+
+    <script type="module">
+        // Импортируем MediaPipe
+        import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+
+        /* ==========================================
+           1. НАСТРОЙКА 3D СЦЕНЫ (THREE.JS)
+           ========================================== */
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.Fog(0x000000, 2, 15); // Туман для глубины
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Создаем "комнату"
+        const roomGeo = new THREE.BoxGeometry(20, 10, 20);
+        const roomMat = new THREE.MeshStandardMaterial({ color: 0x224466, side: THREE.BackSide, wireframe: false });
+        const room = new THREE.Mesh(roomGeo, roomMat);
+        scene.add(room);
+
+        // Добавляем сетку на пол и стены для ориентира
+        const gridHelper = new THREE.GridHelper(20, 20, 0x00ff00, 0x444444);
+        gridHelper.position.y = -5;
+        scene.add(gridHelper);
+
+        // Добавляем парящие объекты для сильного параллакса
+        const cubes = [];
+        const cubeGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+        const cubeMat = new THREE.MeshStandardMaterial({ color: 0xffaa00 });
+        for (let i = 0; i < 30; i++) {
+            const mesh = new THREE.Mesh(cubeGeo, cubeMat);
+            mesh.position.set((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 10);
+            mesh.rotation.set(Math.random(), Math.random(), Math.random());
+            scene.add(mesh);
+            cubes.push(mesh);
+        }
+
+        // Освещение
+        const ambientLight = new THREE.AmbientLight(0x404040);
+        scene.add(ambientLight);
+        const pointLight = new THREE.PointLight(0xffffff, 1.5, 50);
+        pointLight.position.set(0, 2, 0);
+        scene.add(pointLight);
+
+        /* ==========================================
+           2. ПЕРЕМЕННЫЕ ДЛЯ ТРЕКИНГА
+           ========================================== */
+        // Целевая позиция (от MediaPipe)
+        let targetHead = { x: 0, y: 0, z: 5 }; 
+        // Текущая позиция камеры (для плавности)
+        let currentCameraPos = { x: 0, y: 0, z: 5 };
+
+        const SENSITIVITY_XY = 4.0; // Чувствительность по осям X и Y
+        const LERP_FACTOR = 0.08;   // Скорость сглаживания движений
+
+        /* ==========================================
+           3. НАСТРОЙКА MEDIAPIPE И КАМЕРЫ
+           ========================================== */
+        const video = document.getElementById('webcam');
+        const loadingText = document.getElementById('loading');
+        let faceLandmarker;
+        let lastVideoTime = -1;
+
+        async function initMediaPipe() {
+            const vision = await FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+            );
+            faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+                    delegate: "GPU"
+                },
+                outputFaceBlendshapes: false,
+                runningMode: "VIDEO",
+                numFaces: 1
+            });
+            startCamera();
+        }
+
+        function startCamera() {
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+                .then((stream) => {
+                    video.srcObject = stream;
+                    video.addEventListener("loadeddata", () => {
+                        loadingText.innerText = "Система активна! Двигайте головой.";
+                        loadingText.style.color = "#00ff00";
+                        predictWebcam();
+                    });
+                })
+                .catch((err) => {
+                    loadingText.innerText = "Ошибка доступа к камере!";
+                    loadingText.style.color = "#ff0000";
+                    console.error(err);
+                });
+        }
+
+        async function predictWebcam() {
+            if (video.currentTime !== lastVideoTime) {
+                lastVideoTime = video.currentTime;
+                const results = faceLandmarker.detectForVideo(video, performance.now());
+                
+                if (results.faceLandmarks.length > 0) {
+                    const landmarks = results.faceLandmarks[0];
+                    
+                    // X и Y: берем кончик носа (индекс 1)
+                    const nose = landmarks[1];
+                    const mappedX = ((1 - nose.x) - 0.5) * 2; 
+                    const mappedY = -(nose.y - 0.5) * 2; 
+
+                    // Z: вычисляем расстояние между внешними уголками глаз (индексы 33 и 263)
+                    const leftEye = landmarks[33];
+                    const rightEye = landmarks[263];
+                    const dx = rightEye.x - leftEye.x;
+                    const dy = rightEye.y - leftEye.y;
+                    const eyeDistance = Math.sqrt(dx * dx + dy * dy);
+
+                    // Переводим дистанцию глаз в координату Z. 
+                    // Базовое расстояние обычно около 0.12. Чем больше расстояние, тем ближе лицо.
+                    // Формула ниже настраивает камеру так, чтобы она "въезжала" в сцену при приближении лица.
+                    const mappedZ = 5 + (0.12 - eyeDistance) * 30;
+
+                    // Обновляем целевые координаты
+                    targetHead.x = mappedX * SENSITIVITY_XY;
+                    targetHead.y = mappedY * SENSITIVITY_XY;
+                    targetHead.z = Math.max(1, Math.min(mappedZ, 8)); // Ограничиваем Z, чтобы не вылететь за стены
+                }
+            }
+            requestAnimationFrame(predictWebcam);
+        }
+
+        /* ==========================================
+           4. ЦИКЛ АНИМАЦИИ (РЕНДЕР)
+           ========================================== */
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Медленно вращаем кубы для живости
+            cubes.forEach(cube => {
+                cube.rotation.x += 0.005;
+                cube.rotation.y += 0.005;
+            });
+
+            // Плавное следование камеры за головой (Lerp) по всем трем осям
+            currentCameraPos.x += (targetHead.x - currentCameraPos.x) * LERP_FACTOR;
+            currentCameraPos.y += (targetHead.y - currentCameraPos.y) * LERP_FACTOR;
+            currentCameraPos.z += (targetHead.z - currentCameraPos.z) * LERP_FACTOR;
+
+            camera.position.set(currentCameraPos.x, currentCameraPos.y, currentCameraPos.z);
+            camera.lookAt(0, 0, 0); // Камера всегда смотрит в центр сцены
+
+            renderer.render(scene, camera);
+        }
+
+        // Адаптация под размер окна
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Запуск
+        initMediaPipe();
+        animate();
+    </script>
+</body>
+</html>
