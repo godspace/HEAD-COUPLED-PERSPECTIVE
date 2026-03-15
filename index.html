@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>3D Parallax: Телекинез и Мастер-Слайдер</title>
+    <title>3D Parallax: Вращение камеры головой</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; touch-action: none; }
         canvas { display: block; }
@@ -25,7 +25,6 @@
         button#startButton:active { transform: scale(0.95); }
         button#startButton:disabled { background: #555; cursor: not-allowed; box-shadow: none; }
 
-        /* Панель настроек (немного увеличена высота) */
         #controls {
             position: absolute; bottom: 0; left: 0; width: 100%; height: 45%;
             background: rgba(20, 20, 20, 0.85); padding: 10px 15px; box-sizing: border-box;
@@ -36,7 +35,6 @@
         .control-group label { margin-bottom: 4px; display: flex; justify-content: space-between; color: #ddd; }
         .control-group input[type="range"] { width: 100%; }
         
-        /* Выделяем мастер-слайдер цветом */
         .master-group label { color: #e9c46a; font-weight: bold; }
         
         .checkbox-group { display: flex; align-items: center; margin-bottom: 6px; }
@@ -58,8 +56,8 @@
 <body>
 
     <div id="ui-container">
-        <h1>Полный контроль</h1>
-        <p>Мастер-слайдер для всей сцены и телекинез артефакта поворотом головы.</p>
+        <h1>Свободная камера</h1>
+        <p>Теперь повороты вашей головы вращают саму 3D-камеру внутри комнаты.</p>
         <div id="status">Загрузка нейросети...</div>
         <button id="startButton" disabled>СТАРТ</button>
     </div>
@@ -73,7 +71,7 @@
         </div>
         
         <div class="control-group">
-            <label><span>Поворот головы (Артефакт):</span> <span id="headRotVal">1.0</span></label>
+            <label><span>Поворот головы (Камера):</span> <span id="headRotVal">1.0</span></label>
             <input type="range" id="headRotSens" min="0" max="3" step="0.1" value="1.0">
         </div>
 
@@ -161,16 +159,13 @@
         /* ==========================================
            2. ПЕРЕМЕННЫЕ УПРАВЛЕНИЯ
            ========================================== */
-        // Мастер-множитель
         let GLOBAL_SENSITIVITY = 1.0; 
-        
         let GYRO_SENSITIVITY = 0.015; 
         let FACE_SENSITIVITY = 0.3;   
-        let HEAD_ROT_SENSITIVITY = 1.0; // Чувствительность вращения артефакта
+        let HEAD_ROT_SENSITIVITY = 1.0; 
         
         const LERP_FACTOR = 0.08;
 
-        // Цели гироскопа и смещения
         let targetRotX = 0, targetRotY = 0;
         let currentRotX = 0, currentRotY = 0;
         let baseBeta = null, baseGamma = null;
@@ -178,11 +173,10 @@
         let targetPosX = 0, targetPosY = 0;
         let currentPosX = 0, currentPosY = 0;
 
-        // Цели для артефакта (телекинез)
-        let targetArtifactRotX = 0, targetArtifactRotY = 0, targetArtifactRotZ = 0;
-        let currentArtifactRotX = 0, currentArtifactRotY = 0, currentArtifactRotZ = 0;
+        // Цели для вращения самой камеры (от шеи)
+        let targetHeadRotX = 0, targetHeadRotY = 0, targetHeadRotZ = 0;
+        let currentHeadRotX = 0, currentHeadRotY = 0, currentHeadRotZ = 0;
 
-        // Привязка UI
         const globalInput = document.getElementById('globalSens');
         const faceInput = document.getElementById('faceSens');
         const gyroInput = document.getElementById('gyroSens');
@@ -270,7 +264,6 @@
                     let dirY = invertGyroY.checked ? 1 : -1;
                     let dirX = invertGyroX.checked ? 1 : -1;
 
-                    // УМНОЖАЕМ НА ГЛОБАЛЬНУЮ ЧУВСТВИТЕЛЬНОСТЬ
                     targetRotY = dirY * deltaGamma * GYRO_SENSITIVITY * GLOBAL_SENSITIVITY;
                     targetRotX = dirX * deltaBeta * GYRO_SENSITIVITY * GLOBAL_SENSITIVITY;
                 }
@@ -285,26 +278,23 @@
                 if (results.facialTransformationMatrixes && results.facialTransformationMatrixes.length > 0) {
                     const matrixArray = results.facialTransformationMatrixes[0].data;
                     
-                    // --- 1. СМЕЩЕНИЕ ТЕЛА (Translation) ---
+                    // 1. Смещение тела (Translation)
                     let rawX = matrixArray[12] / 10; 
                     let rawY = matrixArray[13] / 10;
                     if (invertFaceX.checked) rawX = -rawX; 
                     if (invertFaceY.checked) rawY = -rawY;
 
-                    // УМНОЖАЕМ НА ГЛОБАЛЬНУЮ ЧУВСТВИТЕЛЬНОСТЬ
                     targetPosX = rawX * FACE_SENSITIVITY * GLOBAL_SENSITIVITY;
                     targetPosY = rawY * FACE_SENSITIVITY * GLOBAL_SENSITIVITY;
 
-                    // --- 2. ВРАЩЕНИЕ ГОЛОВЫ (Rotation) для артефакта ---
-                    // Преобразуем плоский массив MediaPipe в матрицу Three.js
+                    // 2. Вращение головы (Rotation) -> Вращение виртуальной камеры
                     const m4 = new THREE.Matrix4().fromArray(matrixArray);
-                    // Достаем из матрицы углы Эйлера (Pitch, Yaw, Roll)
                     const euler = new THREE.Euler().setFromRotationMatrix(m4);
 
-                    // Передаем углы головы артефакту (умножаем на настройки)
-                    targetArtifactRotX = euler.x * HEAD_ROT_SENSITIVITY * GLOBAL_SENSITIVITY;
-                    targetArtifactRotY = -euler.y * HEAD_ROT_SENSITIVITY * GLOBAL_SENSITIVITY; 
-                    targetArtifactRotZ = -euler.z * HEAD_ROT_SENSITIVITY * GLOBAL_SENSITIVITY;
+                    // Ось Y и Z инвертированы для естественного отклика взгляда
+                    targetHeadRotX = euler.x * HEAD_ROT_SENSITIVITY * GLOBAL_SENSITIVITY;
+                    targetHeadRotY = -euler.y * HEAD_ROT_SENSITIVITY * GLOBAL_SENSITIVITY; 
+                    targetHeadRotZ = -euler.z * HEAD_ROT_SENSITIVITY * GLOBAL_SENSITIVITY;
                 }
             }
             requestAnimationFrame(predictWebcam);
@@ -316,23 +306,27 @@
         function animate() {
             requestAnimationFrame(animate);
 
-            // Плавное вращение артефакта вслед за вашей шеей
-            currentArtifactRotX += (targetArtifactRotX - currentArtifactRotX) * LERP_FACTOR;
-            currentArtifactRotY += (targetArtifactRotY - currentArtifactRotY) * LERP_FACTOR;
-            currentArtifactRotZ += (targetArtifactRotZ - currentArtifactRotZ) * LERP_FACTOR;
-            artifact.rotation.set(currentArtifactRotX, currentArtifactRotY, currentArtifactRotZ);
+            // Артефакт просто красиво левитирует
+            artifact.rotation.x += 0.01;
+            artifact.rotation.y += 0.015;
 
-            // Плавное вращение комнаты (Гироскоп)
+            // Вращение комнаты (Гироскоп)
             currentRotX += (targetRotX - currentRotX) * LERP_FACTOR;
             currentRotY += (targetRotY - currentRotY) * LERP_FACTOR;
             cameraGroup.rotation.x = currentRotX;
             cameraGroup.rotation.y = currentRotY;
 
-            // Плавное смещение камеры (Позиция тела)
+            // Смещение позиции (Тело)
             currentPosX += (targetPosX - currentPosX) * LERP_FACTOR;
             currentPosY += (targetPosY - currentPosY) * LERP_FACTOR;
             camera.position.x = currentPosX;
             camera.position.y = currentPosY;
+
+            // Вращение самой камеры (Повороты головы/шеи)
+            currentHeadRotX += (targetHeadRotX - currentHeadRotX) * LERP_FACTOR;
+            currentHeadRotY += (targetHeadRotY - currentHeadRotY) * LERP_FACTOR;
+            currentHeadRotZ += (targetHeadRotZ - currentHeadRotZ) * LERP_FACTOR;
+            camera.rotation.set(currentHeadRotX, currentHeadRotY, currentHeadRotZ);
 
             renderer.render(scene, camera);
         }
