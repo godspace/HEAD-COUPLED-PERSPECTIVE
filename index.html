@@ -214,19 +214,29 @@
 
         async function loadModels() {
             try {
+                statusText.innerText = "Загрузка нейросети (CPU)...";
                 const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
                 faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-                    baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`, delegate: "GPU" },
-                    outputFaceBlendshapes: false, outputFacialTransformationMatrixes: true, runningMode: "VIDEO", numFaces: 1
+                    baseOptions: { 
+                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`, 
+                        // МЕНЯЕМ GPU НА CPU ДЛЯ СТАБИЛЬНОСТИ НА СМАРТФОНАХ
+                        delegate: "CPU" 
+                    },
+                    outputFaceBlendshapes: false, 
+                    outputFacialTransformationMatrixes: true, 
+                    runningMode: "VIDEO", 
+                    numFaces: 1
                 });
                 statusText.innerText = "Нейросеть готова. Нажмите СТАРТ.";
                 statusText.style.color = "#2a9d8f";
                 startBtn.disabled = false;
             } catch (e) {
-                statusText.innerText = "Ошибка."; statusText.style.color = "#e63946";
+                // Теперь мы выведем не просто слово "Ошибка", а саму причину сбоя
+                statusText.innerText = "Ошибка: " + e.message; 
+                statusText.style.color = "#e63946";
+                console.error("Детали ошибки MediaPipe:", e);
             }
         }
-        loadModels();
 
         startBtn.addEventListener('click', async () => {
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
